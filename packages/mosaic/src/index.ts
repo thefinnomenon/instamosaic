@@ -141,17 +141,18 @@ export async function generateMosaic(input: GenerateMosaicInput): Promise<Mosaic
   // Detect subject/face center for smart crops
   const faceCenter = input.heroFaceCenter ?? await getSmartCropCenter(input.heroPath);
 
-  // Get rotated hero dimensions so we can compute face-centered crop regions
-  const heroMeta = await sharp(input.heroPath).rotate().metadata();
-  const heroW = heroMeta.width ?? options.masterWidth;
-  const heroH = heroMeta.height ?? options.masterHeight;
+  // Normalize EXIF orientation once. Sharp metadata does not reflect `.rotate()`
+  // dimensions, but extract regions are applied after rotation in the pipeline.
+  const orientedHero = await sharp(input.heroPath).rotate().toBuffer({ resolveWithObject: true });
+  const heroInput = orientedHero.data;
+  const heroW = orientedHero.info.width;
+  const heroH = orientedHero.info.height;
   options = orientOptionsForHero(options, heroW, heroH);
 
   // ── PRINT PASS ──────────────────────────────────────────────────────────────
   input.onProgress?.("Matching print mosaic cells", 0.1);
   const printHeroRegion = cropRegionForFace(heroW, heroH, options.masterWidth, options.masterHeight, faceCenter);
-  const printHeroRaw = await sharp(input.heroPath)
-    .rotate()
+  const printHeroRaw = await sharp(heroInput)
     .extract(printHeroRegion)
     .resize(options.masterWidth, options.masterHeight)
     .removeAlpha()
@@ -186,8 +187,7 @@ export async function generateMosaic(input: GenerateMosaicInput): Promise<Mosaic
 
   input.onProgress?.("Blending print hero", 0.48);
   const masterPath = path.join(input.outputDir, downloadOutputTypes.master.filename);
-  const printHeroOverlay = await sharp(input.heroPath)
-    .rotate()
+  const printHeroOverlay = await sharp(heroInput)
     .extract(printHeroRegion)
     .resize(options.masterWidth, options.masterHeight)
     .ensureAlpha(clamp(options.heroBlendOpacity, 0, 1))
@@ -205,8 +205,7 @@ export async function generateMosaic(input: GenerateMosaicInput): Promise<Mosaic
   // ── SCREEN PASS ─────────────────────────────────────────────────────────────
   input.onProgress?.("Matching screen mosaic cells", 0.55);
   const screenHeroRegion = cropRegionForFace(heroW, heroH, options.screenWidth, options.screenHeight, faceCenter);
-  const screenHeroRaw = await sharp(input.heroPath)
-    .rotate()
+  const screenHeroRaw = await sharp(heroInput)
     .extract(screenHeroRegion)
     .resize(options.screenWidth, options.screenHeight)
     .removeAlpha()
@@ -243,8 +242,7 @@ export async function generateMosaic(input: GenerateMosaicInput): Promise<Mosaic
 
   input.onProgress?.("Blending screen hero", 0.72);
   const screenMasterPath = path.join(input.outputDir, ".screen-master.jpg");
-  const screenHeroOverlay = await sharp(input.heroPath)
-    .rotate()
+  const screenHeroOverlay = await sharp(heroInput)
     .extract(screenHeroRegion)
     .resize(options.screenWidth, options.screenHeight)
     .ensureAlpha(clamp(options.heroBlendOpacity, 0, 1))
@@ -348,18 +346,28 @@ function cropRegionForFace(
   if (targetAspect > srcAspect) {
     // Target wider → use full source width, crop height
     cropW = srcWidth;
-    cropH = Math.round(srcWidth / targetAspect);
+    cropH = Math.floor(srcWidth / targetAspect);
     left = 0;
     top = clamp(Math.round(face.y * srcHeight - cropH / 2), 0, srcHeight - cropH);
   } else {
     // Target taller (or same ratio) → use full source height, crop width
     cropH = srcHeight;
-    cropW = Math.round(srcHeight * targetAspect);
+    cropW = Math.floor(srcHeight * targetAspect);
     top = 0;
     left = clamp(Math.round(face.x * srcWidth - cropW / 2), 0, srcWidth - cropW);
   }
 
-  return { left, top, width: cropW, height: cropH };
+  cropW = clamp(cropW, 1, srcWidth);
+  cropH = clamp(cropH, 1, srcHeight);
+  left = clamp(left, 0, srcWidth - cropW);
+  top = clamp(top, 0, srcHeight - cropH);
+
+  return {
+    left: Math.floor(left),
+    top: Math.floor(top),
+    width: Math.floor(cropW),
+    height: Math.floor(cropH)
+  };
 }
 
 async function loadTiles(tilePaths: string[]): Promise<Tile[]> {

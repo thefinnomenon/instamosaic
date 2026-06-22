@@ -65,8 +65,8 @@ export async function saveHeroImage(file: File, jobId: string): Promise<{ heroPa
   await mkdir(outputDir, { recursive: true });
   const heroPath = path.join(outputDir, `hero-${randomUUID()}.${extension}`);
   await writeFile(heroPath, bytes);
-  const metadata = await sharp(heroPath).rotate().metadata();
-  return { heroPath, outputDir, bytes: bytes.length, mime, width: metadata.width ?? null, height: metadata.height ?? null };
+  const metadata = await sharp(heroPath).rotate().toBuffer({ resolveWithObject: true });
+  return { heroPath, outputDir, bytes: bytes.length, mime, width: metadata.info.width ?? null, height: metadata.info.height ?? null };
 }
 
 export async function imageResponse(filePath: string, filename?: string): Promise<Response> {

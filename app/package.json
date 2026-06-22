@@ -1,0 +1,19 @@
+{
+  "name": "@instamosaic/app",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vinxi dev --host 0.0.0.0",
+    "build": "vinxi build",
+    "start": "vinxi start --host 0.0.0.0"
+  },
+  "dependencies": {
+    "@solidjs/router": "^0.15.3",
+    "@solidjs/start": "^1.1.0",
+    "lucide-solid": "^0.468.0",
+    "solid-js": "^1.9.5",
+    "solid-ui": "^0.8.0",
+    "vinxi": "^0.5.3"
+  }
+}

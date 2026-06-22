@@ -1,0 +1,35 @@
+{
+  "name": "instamosaic",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "app",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "npm --workspace app run dev",
+    "build": "npm run build --workspaces --if-present",
+    "start": "npm --workspace app run start",
+    "worker": "tsx packages/worker/src/cli.ts",
+    "db:init": "tsx packages/db/src/init.ts",
+    "test:check": "tsx scripts/test-check.ts",
+    "test:download": "tsx scripts/test-download.ts",
+    "test:mosaic": "tsx scripts/test-mosaic.ts",
+    "test:pipeline": "tsx scripts/test-pipeline.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^22.15.32",
+    "playwright": "^1.61.0",
+    "tsx": "^4.20.3",
+    "typescript": "^5.8.3"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.10.0",
+    "dotenv": "^16.5.0",
+    "sharp": "^0.34.2",
+    "stripe": "^18.2.1"
+  }
+}

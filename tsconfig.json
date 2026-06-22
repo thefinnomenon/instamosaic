@@ -1,0 +1,26 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "types": ["node"],
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "skipLibCheck": true,
+    "allowImportingTsExtensions": true,
+    "allowSyntheticDefaultImports": true,
+    "esModuleInterop": true,
+    "resolveJsonModule": true,
+    "jsx": "preserve",
+    "jsxImportSource": "solid-js",
+    "baseUrl": ".",
+    "paths": {
+      "@instamosaic/db": ["packages/db/src/index.ts"],
+      "@instamosaic/mosaic": ["packages/mosaic/src/index.ts"],
+      "@instamosaic/worker": ["packages/worker/src/index.ts"]
+    }
+  },
+  "include": ["app/src", "packages/**/*.ts", "scripts/**/*.ts"]
+}

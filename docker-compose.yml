@@ -1,0 +1,17 @@
+services:
+  app:
+    build: .
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+    ports:
+      - "3000:3000"
+    volumes:
+      - instamosaic-data:/app/storage
+    command: ["npm", "run", "start"]
+    restart: unless-stopped
+
+volumes:
+  instamosaic-data:

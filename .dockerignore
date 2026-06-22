@@ -1,0 +1,10 @@
+node_modules
+.git
+.env
+.vinxi
+.output
+dist
+storage
+tmp
+*.log
+.DS_Store

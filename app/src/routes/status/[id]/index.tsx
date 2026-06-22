@@ -184,7 +184,7 @@ export default function StatusPage() {
     setDownloadMessage("");
 
     try {
-      const response = await fetch(`/api/download/${current.downloadToken}/master`);
+      const response = await fetch(`/api/download/${current.downloadToken}/bundle`);
       if (!response.ok) {
         const data = await response.json().catch(() => ({})) as { error?: string };
         throw new Error(data.error || "Unable to download the digital file.");
@@ -194,7 +194,7 @@ export default function StatusPage() {
       const objectUrl = URL.createObjectURL(blob);
       const link = document.createElement("a");
       link.href = objectUrl;
-      link.download = filenameFromContentDisposition(response.headers.get("Content-Disposition")) || `instamosaic-${current.username}-master-24x36.jpg`;
+      link.download = filenameFromContentDisposition(response.headers.get("Content-Disposition")) || `instamosaic-${current.username}-digital-files.zip`;
       link.style.display = "none";
       document.body.append(link);
       link.click();

@@ -2,6 +2,9 @@ import { mkdir, readdir, rm } from "node:fs/promises";
 import path from "node:path";
 import sharp from "sharp";
 
+sharp.cache(false);
+sharp.concurrency(1);
+
 export type MosaicOptions = {
   masterWidth: number;
   masterHeight: number;
@@ -263,7 +266,8 @@ export async function generateMosaic(input: GenerateMosaicInput): Promise<Mosaic
     screenMasterPath,
     outputDir: input.outputDir,
     options,
-    faceCenter
+    faceCenter,
+    onProgress: (fraction) => input.onProgress?.("Generating exports", interpolate(0.80, 0.96, fraction))
   });
 
   await rm(screenMasterPath, { force: true });
@@ -649,6 +653,7 @@ async function exportOutputs(input: {
   outputDir: string;
   options: MosaicOptions;
   faceCenter: { x: number; y: number };
+  onProgress?: (fraction: number) => void;
 }): Promise<Record<MosaicOutputType, MosaicOutput>> {
   const { masterPath, screenMasterPath, outputDir, options } = input;
 
@@ -665,41 +670,49 @@ async function exportOutputs(input: {
   const print18x24Size = landscape ? { width: 7200, height: 5400 } : { width: 5400, height: 7200 };
   const print12x18Size = landscape ? { width: 5400, height: 3600 } : { width: 3600, height: 5400 };
 
-  const [socialPreview, squarePreview, print18x24, print12x18, phoneWallpaper, desktopWallpaper] =
-    await Promise.all([
-      // Screen-sourced (60px tiles)
-      exportResized({
-        sourcePath: screenMasterPath, sourceWidth: screenW, sourceHeight: screenH,
-        outputPath: path.join(outputDir, downloadOutputTypes.socialPreview.filename),
-        width: socialSize.width, height: socialSize.height, watermarked: false, cropCenter: { x: 0.5, y: 0.5 }, options
-      }),
-      exportResized({
-        sourcePath: screenMasterPath, sourceWidth: screenW, sourceHeight: screenH,
-        outputPath: path.join(outputDir, downloadOutputTypes.squarePreview.filename),
-        width: 1080, height: 1080, watermarked: false, cropCenter: { x: 0.5, y: 0.5 }, options
-      }),
-      // Print-sourced (150px → scaled down)
-      exportResized({
-        sourcePath: masterPath, sourceWidth: masterW, sourceHeight: masterH,
-        outputPath: path.join(outputDir, downloadOutputTypes.print18x24.filename),
-        width: print18x24Size.width, height: print18x24Size.height, density: 300, watermarked: false, cropCenter: { x: 0.5, y: 0.5 }, options
-      }),
-      exportResized({
-        sourcePath: masterPath, sourceWidth: masterW, sourceHeight: masterH,
-        outputPath: path.join(outputDir, downloadOutputTypes.print12x18.filename),
-        width: print12x18Size.width, height: print12x18Size.height, density: 300, watermarked: false, cropCenter: { x: 0.5, y: 0.5 }, options
-      }),
-      exportResized({
-        sourcePath: masterPath, sourceWidth: masterW, sourceHeight: masterH,
-        outputPath: path.join(outputDir, downloadOutputTypes.phoneWallpaper.filename),
-        width: 1290, height: 2796, watermarked: false, cropCenter: { x: 0.5, y: 0.5 }, options
-      }),
-      exportResized({
-        sourcePath: masterPath, sourceWidth: masterW, sourceHeight: masterH,
-        outputPath: path.join(outputDir, downloadOutputTypes.desktopWallpaper.filename),
-        width: 2560, height: 1440, watermarked: false, cropCenter: { x: 0.5, y: 0.38 }, options
-      })
-    ]);
+  // Keep these sequential. Running the large master-derived exports in parallel
+  // can exceed memory on small Docker hosts and get the worker OOM-killed.
+  const socialPreview = await exportResized({
+    sourcePath: screenMasterPath, sourceWidth: screenW, sourceHeight: screenH,
+    outputPath: path.join(outputDir, downloadOutputTypes.socialPreview.filename),
+    width: socialSize.width, height: socialSize.height, watermarked: false, cropCenter: { x: 0.5, y: 0.5 }, options
+  });
+  input.onProgress?.(1 / 6);
+
+  const squarePreview = await exportResized({
+    sourcePath: screenMasterPath, sourceWidth: screenW, sourceHeight: screenH,
+    outputPath: path.join(outputDir, downloadOutputTypes.squarePreview.filename),
+    width: 1080, height: 1080, watermarked: false, cropCenter: { x: 0.5, y: 0.5 }, options
+  });
+  input.onProgress?.(2 / 6);
+
+  const print18x24 = await exportResized({
+    sourcePath: masterPath, sourceWidth: masterW, sourceHeight: masterH,
+    outputPath: path.join(outputDir, downloadOutputTypes.print18x24.filename),
+    width: print18x24Size.width, height: print18x24Size.height, density: 300, watermarked: false, cropCenter: { x: 0.5, y: 0.5 }, options
+  });
+  input.onProgress?.(3 / 6);
+
+  const print12x18 = await exportResized({
+    sourcePath: masterPath, sourceWidth: masterW, sourceHeight: masterH,
+    outputPath: path.join(outputDir, downloadOutputTypes.print12x18.filename),
+    width: print12x18Size.width, height: print12x18Size.height, density: 300, watermarked: false, cropCenter: { x: 0.5, y: 0.5 }, options
+  });
+  input.onProgress?.(4 / 6);
+
+  const phoneWallpaper = await exportResized({
+    sourcePath: masterPath, sourceWidth: masterW, sourceHeight: masterH,
+    outputPath: path.join(outputDir, downloadOutputTypes.phoneWallpaper.filename),
+    width: 1290, height: 2796, watermarked: false, cropCenter: { x: 0.5, y: 0.5 }, options
+  });
+  input.onProgress?.(5 / 6);
+
+  const desktopWallpaper = await exportResized({
+    sourcePath: masterPath, sourceWidth: masterW, sourceHeight: masterH,
+    outputPath: path.join(outputDir, downloadOutputTypes.desktopWallpaper.filename),
+    width: 2560, height: 1440, watermarked: false, cropCenter: { x: 0.5, y: 0.38 }, options
+  });
+  input.onProgress?.(1);
 
   return {
     master: { type: "master", path: masterPath, width: masterW, height: masterH, watermarked: false },

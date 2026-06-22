@@ -45,7 +45,7 @@ STRIPE_WEBHOOK_SECRET_PROD=...
 
 ```bash
 docker compose up -d --build
-docker compose logs -f app
+docker compose logs -f app worker
 ```
 
 The app listens on port `3000`.
@@ -100,7 +100,7 @@ Useful commands:
 
 ```bash
 docker compose ps
-docker compose logs -f worker
+docker compose logs -f app worker
 docker compose restart worker
 docker compose exec app npm run db:init
 ```

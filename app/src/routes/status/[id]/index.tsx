@@ -9,6 +9,7 @@ type PublicJob = {
   status: "queued" | "processing" | "completed" | "failed";
   progress: number;
   step: string;
+  queuePosition: number | null;
   igPostCount: number;
   downloadedCount: number;
   skippedCount: number;
@@ -58,6 +59,7 @@ export default function StatusPage() {
     if (!current) return "Loading your job...";
     if (current.status === "failed") return "Something went wrong.";
     if (current.status === "completed") return "Your mosaic is ready.";
+    if (current.status === "queued") return queueStatusText(current.queuePosition);
     if (current.progress < 8) return "Checking Instagram...";
     if (current.progress < 72) return "Downloading and analyzing photos...";
     return "Building mosaic...";
@@ -293,6 +295,14 @@ export default function StatusPage() {
         <Show when={job()} fallback={<p class="message">{error() || "Loading job..."}</p>}>
           {(current) => (
             <div class={`status-hero ${current().status === "completed" ? "status-hero-complete" : ""}`}>
+              <div class="status-copy">
+                <p class="eyebrow">@{current().username}</p>
+                <h1>{current().status === "completed" ? "Your mosaic is ready." : current().status === "failed" ? "We couldn't finish this mosaic." : current().status === "queued" ? "Your mosaic is queued." : "Your mosaic is processing."}</h1>
+                <Show when={current().status !== "completed"}>
+                  <p class="lede">{statusText()}</p>
+                </Show>
+              </div>
+
               <div
                 ref={previewFrame}
                 class={`status-image-wrap ${previewFrameClass(current())}${isDraggingPreview() ? " status-image-dragging" : ""}`}
@@ -336,14 +346,6 @@ export default function StatusPage() {
                       <LoaderCircle class="spin" size={24} />
                     </div>
                   </div>
-                </Show>
-              </div>
-
-              <div class="status-copy">
-                <p class="eyebrow">@{current().username}</p>
-                <h1>{current().status === "completed" ? "Your mosaic is ready." : current().status === "failed" ? "We couldn't finish this mosaic." : "Your mosaic is processing."}</h1>
-                <Show when={current().status !== "completed"}>
-                  <p class="lede">{statusText()}</p>
                 </Show>
               </div>
             </div>
@@ -405,7 +407,7 @@ export default function StatusPage() {
         </Show>
 
         <Show when={job() && job()?.status !== "completed" && job()?.status !== "failed"}>
-          <p class="message message-inline"><Clock size={18} /> This page updates automatically.</p>
+          <p class="message message-inline"><Clock size={18} /> This page updates automatically, and we'll email you when your mosaic is ready.</p>
         </Show>
       </Panel>
     </div>
@@ -415,6 +417,12 @@ export default function StatusPage() {
 function formatProcessingTime(seconds: number | null): string {
   if (seconds == null) return "Done";
   return formatDuration(seconds);
+}
+
+function queueStatusText(position: number | null): string {
+  if (!position || position < 1) return "Waiting for the next worker slot...";
+  if (position === 1) return "You're next in line.";
+  return `You're #${position} in line.`;
 }
 
 function formatDuration(seconds: number): string {

@@ -8,7 +8,9 @@
     "packages/*"
   ],
   "scripts": {
-    "dev": "npm --workspace app run dev",
+    "dev": "concurrently -n app,worker -c cyan,magenta \"npm run dev:app\" \"npm run dev:worker\"",
+    "dev:app": "npm --workspace app run dev",
+    "dev:worker": "npm run worker",
     "build": "npm run build --workspaces --if-present",
     "start": "npm --workspace app run start",
     "worker": "tsx packages/worker/src/cli.ts",
@@ -22,6 +24,7 @@
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^22.15.32",
+    "concurrently": "^10.0.3",
     "playwright": "^1.61.0",
     "tsx": "^4.20.3",
     "typescript": "^5.8.3"

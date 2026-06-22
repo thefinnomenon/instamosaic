@@ -13,5 +13,18 @@ services:
     command: ["npm", "run", "start"]
     restart: unless-stopped
 
+  worker:
+    build: .
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
+    volumes:
+      - instamosaic-data:/app/storage
+    command: ["npm", "run", "worker"]
+    restart: unless-stopped
+    depends_on:
+      - app
+
 volumes:
   instamosaic-data:

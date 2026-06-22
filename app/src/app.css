@@ -491,35 +491,48 @@ h3 {
 }
 
 .status-panel {
-  width: min(1080px, 100%);
+  width: min(720px, 100%);
   margin: 0 auto;
   padding: 24px;
 }
 
 .status-hero {
   display: grid;
-  grid-template-columns: minmax(240px, 0.7fr) minmax(0, 1fr);
-  gap: 22px;
-  align-items: center;
+  justify-items: center;
+  gap: 18px;
+  text-align: center;
   margin-bottom: 22px;
 }
 
 .status-hero-complete {
-  grid-template-columns: minmax(320px, 1fr) minmax(280px, 0.56fr);
-  align-items: start;
+  align-items: center;
 }
 
 .status-hero-complete .status-copy {
   max-width: 760px;
 }
 
+.status-copy {
+  display: grid;
+  justify-items: center;
+}
+
+.status-copy .lede {
+  max-width: 620px;
+}
+
 .status-image-wrap {
   position: relative;
   overflow: hidden;
+  width: min(100%, 420px);
   border: 1px solid var(--line);
   border-radius: 8px;
   background: #dfe5dc;
   aspect-ratio: 4 / 5;
+}
+
+.status-hero-complete .status-image-wrap {
+  justify-self: center;
 }
 
 .status-hero-image {
@@ -554,6 +567,7 @@ h3 {
 
 .status-image-landscape {
   aspect-ratio: 3 / 2;
+  width: min(100%, 520px);
 }
 
 .status-image-complete .status-hero-image {
@@ -854,9 +868,13 @@ td {
   }
 
   .layout,
-  .result-grid,
-  .status-hero {
+  .result-grid {
     grid-template-columns: 1fr;
+  }
+
+  .status-image-wrap,
+  .status-image-landscape {
+    width: 100%;
   }
 
   .preview-art,

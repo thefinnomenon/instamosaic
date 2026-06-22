@@ -6,7 +6,7 @@ Flow:
 
 1. User enters Instagram username, hero image, and email.
 2. App checks the Instagram profile after a 700ms debounce.
-3. Submit creates a SQLite job, sends the processing email, and enqueues work.
+3. Submit creates a queued SQLite job and sends the processing email.
 4. TypeScript downloads public Instagram image posts through RapidAPI and converts them into square tiles.
 5. TypeScript + sharp builds a 24x36 master mosaic and exports previews/print/wallpaper files.
 6. Stripe Checkout unlocks unlimited paid downloads.
@@ -89,7 +89,28 @@ npm run test:pipeline -- demo app/public/mosaic-sample.jpg --mock
 
 ## Worker
 
-Submitted jobs process in the app process.
+Submitted jobs are queued in SQLite. During local development, `npm run dev` starts both the web app and worker.
+
+Run only the web app:
+
+```bash
+npm run dev:app
+```
+
+Run only the worker:
+
+```bash
+npm run worker
+```
+
+The worker claims one queued job at a time and processes it to completion before taking the next job.
+
+Docker Compose runs both services:
+
+```bash
+docker compose up -d --build
+docker compose logs -f app worker
+```
 
 ## Stripe
 

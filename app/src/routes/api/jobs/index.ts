@@ -4,12 +4,11 @@ import {
   assertRateLimit,
   createJob,
   hasActiveJobForEmail,
-  hasActiveJobForIp,
   logError,
   toPublicJob,
   trackEvent
 } from "@instamosaic/db";
-import { normalizeEmail, processJob, sanitizeInstagramUsername, sendInitialProcessingEmail } from "@instamosaic/worker";
+import { normalizeEmail, sanitizeInstagramUsername, sendInitialProcessingEmail } from "@instamosaic/worker";
 import { errorJson, getClientIp, json, rateLimitResponse, saveHeroImage, shouldBypassRateLimit } from "../../../lib/server.ts";
 
 const MIN_COMPLETION_MS = 3_000;
@@ -49,7 +48,6 @@ export async function POST({ request }: APIEvent): Promise<Response> {
     const emailLimit = assertRateLimit({ scope: "jobs_email", identity: email, limit: JOBS_EMAIL_LIMIT, windowMs: JOBS_EMAIL_WINDOW_MS });
     if (!emailLimit.allowed) return rateLimitResponse(emailLimit.retryAfterSeconds);
   }
-  if (hasActiveJobForIp(ip)) return errorJson("There is already an active job from this IP address.", 409);
   if (hasActiveJobForEmail(email)) return errorJson("There is already an active job for this email address.", 409);
 
   const hero = form.get("hero");
@@ -88,18 +86,6 @@ export async function POST({ request }: APIEvent): Promise<Response> {
       stack: error instanceof Error ? error.stack : undefined
     });
   });
-
-  setTimeout(() => {
-    processJob(job.id).catch((error) => {
-      logError({
-        event: "worker_failed",
-        jobId: job.id,
-        user: email,
-        message: error instanceof Error ? error.message : String(error),
-        stack: error instanceof Error ? error.stack : undefined
-      });
-    });
-  }, 0);
 
   return json({ job: toPublicJob(job) }, { status: 201 });
 }

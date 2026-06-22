@@ -53,6 +53,7 @@ export type PublicJob = {
   status: JobStatus;
   progress: number;
   step: string;
+  queuePosition: number | null;
   igPublic: boolean | null;
   igPostCount: number | null;
   downloadedCount: number;
@@ -389,6 +390,7 @@ export function toPublicJob(job: Job, includeDownloadToken = false): PublicJob {
     status: job.status,
     progress: job.progress,
     step: job.step,
+    queuePosition: queuePosition(job),
     igPublic: job.ig_public == null ? null : job.ig_public === 1,
     igPostCount: job.ig_post_count,
     downloadedCount: job.downloaded_count,
@@ -411,6 +413,19 @@ export function toPublicJob(job: Job, includeDownloadToken = false): PublicJob {
     mosaicWidth: finiteNumber(mosaicMetadata.masterWidth),
     mosaicHeight: finiteNumber(mosaicMetadata.masterHeight)
   };
+}
+
+function queuePosition(job: Job): number | null {
+  if (job.status !== "queued") return null;
+  const value = getDb()
+    .prepare(
+      `SELECT COUNT(*) + 1 AS position
+       FROM jobs
+       WHERE status = 'queued'
+         AND (created_at < @createdAt OR (created_at = @createdAt AND id < @id))`
+    )
+    .get({ createdAt: job.created_at, id: job.id }) as { position?: number } | undefined;
+  return typeof value?.position === "number" ? value.position : null;
 }
 
 function parseJobMetadata(metadata: string | null): Record<string, unknown> {

@@ -60,7 +60,7 @@ export default function AdminPage() {
               <Metric label="Failed" value={data().failedJobs} />
               <Metric label="Revenue" value={`$${((data().revenueCents || 0) / 100).toFixed(2)}`} />
               <Metric label="Downloads" value={data().downloads} />
-              <Metric label="Avg seconds" value={data().averageProcessingSeconds} />
+              <Metric label="Avg time" value={formatDuration(data().averageProcessingSeconds)} />
               <Metric label="Completed rate" value={`${Math.round((data().conversion?.completedRate || 0) * 100)}%`} />
               <Metric label="Paid rate" value={`${Math.round((data().conversion?.paidRate || 0) * 100)}%`} />
             </div>
@@ -117,4 +117,12 @@ function formatValue(value: unknown) {
   if (value == null) return "";
   if (typeof value === "string" && value.length > 120) return `${value.slice(0, 117)}...`;
   return String(value);
+}
+
+function formatDuration(value: unknown): string {
+  const seconds = Math.max(0, Math.round(Number(value) || 0));
+  const minutes = Math.floor(seconds / 60);
+  const remainingSeconds = seconds % 60;
+  if (minutes <= 0) return `${remainingSeconds}s`;
+  return `${minutes}m${remainingSeconds}s`;
 }

@@ -99,6 +99,44 @@ export async function sendDigitalPurchaseEmail(input: {
   });
 }
 
+export async function sendAdminJobCreatedEmail(input: {
+  jobId: string;
+  username: string;
+  customerEmail: string;
+  ip?: string | undefined;
+}): Promise<void> {
+  const adminEmail = "chris@finnternet.com";
+  const statusUrl = `${appUrl()}/status/${input.jobId}`;
+  const adminUrl = `${appUrl()}/admin`;
+  await sendEmail({
+    to: adminEmail,
+    jobId: input.jobId,
+    event: "admin_job_created_email_sent",
+    subject: `New InstaMosaic started: @${input.username}`,
+    text: [
+      `A new InstaMosaic was submitted for @${input.username}.`,
+      "",
+      `Customer email: ${input.customerEmail}`,
+      input.ip ? `IP: ${input.ip}` : "",
+      "",
+      `Status: ${statusUrl}`,
+      `Admin: ${adminUrl}`
+    ].filter(Boolean).join("\n"),
+    html: `
+      <div style="font-family:Arial,sans-serif;line-height:1.5;color:#17202a">
+        <h1 style="font-size:22px">New InstaMosaic started</h1>
+        <p><strong>@${escapeHtml(input.username)}</strong> submitted a mosaic.</p>
+        <p>Customer email: <strong>${escapeHtml(input.customerEmail)}</strong></p>
+        ${input.ip ? `<p>IP: ${escapeHtml(input.ip)}</p>` : ""}
+        <p>
+          <a href="${statusUrl}" style="display:inline-block;background:#17202a;color:white;padding:12px 16px;border-radius:6px;text-decoration:none">View Status</a>
+          <a href="${adminUrl}" style="display:inline-block;margin-left:8px;color:#17202a">Admin</a>
+        </p>
+      </div>
+    `
+  });
+}
+
 async function sendEmail(input: EmailInput): Promise<void> {
   const apiKey = process.env.RESEND_API_KEY;
   const from = "InstaMosaic <onboarding@resend.dev>";
@@ -145,6 +183,14 @@ async function sendEmail(input: EmailInput): Promise<void> {
       stack: error instanceof Error ? error.stack : undefined
     });
   }
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;");
 }
 
 function formatMoney(amountCents?: number | null, currency?: string | null): string | null {

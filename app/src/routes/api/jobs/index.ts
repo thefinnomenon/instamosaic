@@ -8,7 +8,7 @@ import {
   toPublicJob,
   trackEvent
 } from "@instamosaic/db";
-import { normalizeEmail, sanitizeInstagramUsername, sendInitialProcessingEmail } from "@instamosaic/worker";
+import { normalizeEmail, sanitizeInstagramUsername, sendAdminJobCreatedEmail, sendInitialProcessingEmail } from "@instamosaic/worker";
 import { errorJson, getClientIp, json, rateLimitResponse, saveHeroImage, shouldBypassRateLimit } from "../../../lib/server.ts";
 
 const MIN_COMPLETION_MS = 3_000;
@@ -80,6 +80,15 @@ export async function POST({ request }: APIEvent): Promise<Response> {
   void sendInitialProcessingEmail({ to: email, jobId: job.id, username }).catch((error) => {
     logError({
       event: "processing_email_sent",
+      jobId: job.id,
+      user: email,
+      message: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined
+    });
+  });
+  void sendAdminJobCreatedEmail({ jobId: job.id, username, customerEmail: email, ip }).catch((error) => {
+    logError({
+      event: "admin_job_created_email_sent",
       jobId: job.id,
       user: email,
       message: error instanceof Error ? error.message : String(error),

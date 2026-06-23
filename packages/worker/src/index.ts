@@ -16,7 +16,7 @@ import {
 import { sendPreviewEmail, sendProcessingEmail } from "./email.ts";
 import { checkInstagramProfile, downloadInstagramTiles } from "./instagram.ts";
 export { checkInstagramProfile, downloadInstagramTiles, mockDownloadInstagramTiles } from "./instagram.ts";
-export { sendDigitalPurchaseEmail } from "./email.ts";
+export { sendAdminJobCreatedEmail, sendDigitalPurchaseEmail } from "./email.ts";
 export { appUrl, normalizeEmail, sanitizeInstagramUsername } from "./validation.ts";
 
 export type ProcessJobOptions = {

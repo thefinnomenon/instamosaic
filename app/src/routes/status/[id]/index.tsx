@@ -374,12 +374,7 @@ export default function StatusPage() {
                   </div>
 
                   <div class="result-actions">
-                    <Show when={current().paid && current().downloadToken} fallback={
-                      <Button type="button" onClick={checkoutDigital} disabled={checkoutLoading() || confirmingCheckout()}>
-                        <CreditCard size={18} />
-                        {checkoutLoading() ? "Opening checkout..." : confirmingCheckout() ? "Confirming payment..." : "Buy Digital Download - $4.99"}
-                      </Button>
-                    }>
+                    <Show when={current().downloadToken}>
                       <Button type="button" onClick={downloadDigital} disabled={downloadLoading()}>
                         <Download size={16} />
                         {downloadLoading() ? "Preparing Download..." : "Download Digital"}

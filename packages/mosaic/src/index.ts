@@ -28,6 +28,7 @@ export type MosaicOutputType =
   | "master"
   | "socialPreview"
   | "squarePreview"
+  | "print20x30"
   | "print18x24"
   | "print12x18"
   | "phoneWallpaper"
@@ -92,6 +93,7 @@ type Placement = {
 
 export const downloadOutputTypes: Record<MosaicOutputType, { filename: string; label: string }> = {
   master: { filename: "master-24x36.jpg", label: "24x36 master" },
+  print20x30: { filename: "print-20x30.jpg", label: "20x30 print" },
   print18x24: { filename: "print-18x24.jpg", label: "18x24 print" },
   print12x18: { filename: "print-12x18.jpg", label: "12x18 print" },
   phoneWallpaper: { filename: "wallpaper-phone.jpg", label: "Phone wallpaper" },
@@ -667,6 +669,7 @@ async function exportOutputs(input: {
   const screenH = screenMeta.height ?? options.screenHeight;
   const landscape = masterW > masterH;
   const socialSize = landscape ? { width: 1350, height: 1080 } : { width: 1080, height: 1350 };
+  const print20x30Size = landscape ? { width: 9000, height: 6000 } : { width: 6000, height: 9000 };
   const print18x24Size = landscape ? { width: 7200, height: 5400 } : { width: 5400, height: 7200 };
   const print12x18Size = landscape ? { width: 5400, height: 3600 } : { width: 3600, height: 5400 };
 
@@ -686,26 +689,33 @@ async function exportOutputs(input: {
   });
   input.onProgress?.(2 / 6);
 
+  const print20x30 = await exportResized({
+    sourcePath: masterPath, sourceWidth: masterW, sourceHeight: masterH,
+    outputPath: path.join(outputDir, downloadOutputTypes.print20x30.filename),
+    width: print20x30Size.width, height: print20x30Size.height, density: 300, watermarked: false, cropCenter: { x: 0.5, y: 0.5 }, options
+  });
+  input.onProgress?.(3 / 7);
+
   const print18x24 = await exportResized({
     sourcePath: masterPath, sourceWidth: masterW, sourceHeight: masterH,
     outputPath: path.join(outputDir, downloadOutputTypes.print18x24.filename),
     width: print18x24Size.width, height: print18x24Size.height, density: 300, watermarked: false, cropCenter: { x: 0.5, y: 0.5 }, options
   });
-  input.onProgress?.(3 / 6);
+  input.onProgress?.(4 / 7);
 
   const print12x18 = await exportResized({
     sourcePath: masterPath, sourceWidth: masterW, sourceHeight: masterH,
     outputPath: path.join(outputDir, downloadOutputTypes.print12x18.filename),
     width: print12x18Size.width, height: print12x18Size.height, density: 300, watermarked: false, cropCenter: { x: 0.5, y: 0.5 }, options
   });
-  input.onProgress?.(4 / 6);
+  input.onProgress?.(5 / 7);
 
   const phoneWallpaper = await exportResized({
     sourcePath: masterPath, sourceWidth: masterW, sourceHeight: masterH,
     outputPath: path.join(outputDir, downloadOutputTypes.phoneWallpaper.filename),
     width: 1290, height: 2796, watermarked: false, cropCenter: { x: 0.5, y: 0.5 }, options
   });
-  input.onProgress?.(5 / 6);
+  input.onProgress?.(6 / 7);
 
   const desktopWallpaper = await exportResized({
     sourcePath: masterPath, sourceWidth: masterW, sourceHeight: masterH,
@@ -718,6 +728,7 @@ async function exportOutputs(input: {
     master: { type: "master", path: masterPath, width: masterW, height: masterH, watermarked: false },
     socialPreview,
     squarePreview,
+    print20x30,
     print18x24,
     print12x18,
     phoneWallpaper,

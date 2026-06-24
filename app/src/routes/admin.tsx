@@ -1,5 +1,5 @@
 import { RefreshCw } from "lucide-solid";
-import { For, Show, createSignal } from "solid-js";
+import { For, Show, createSignal, type JSX } from "solid-js";
 import { Button, Panel, TextInput } from "../components/ui.tsx";
 
 type Metrics = Record<string, any>;
@@ -9,6 +9,7 @@ export default function AdminPage() {
   const [metrics, setMetrics] = createSignal<Metrics | null>(null);
   const [error, setError] = createSignal("");
   const [loading, setLoading] = createSignal(false);
+  const [syncingPrintOrder, setSyncingPrintOrder] = createSignal<number | null>(null);
 
   async function load() {
     setLoading(true);
@@ -22,6 +23,26 @@ export default function AdminPage() {
       setError(loadError instanceof Error ? loadError.message : "Unable to load dashboard.");
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function syncPrintOrder(id: unknown) {
+    const printOrderId = Number(id);
+    if (!Number.isInteger(printOrderId) || printOrderId <= 0 || syncingPrintOrder()) return;
+    setSyncingPrintOrder(printOrderId);
+    setError("");
+    try {
+      const response = await fetch(`/api/admin/print-orders/${printOrderId}/sync`, {
+        method: "POST",
+        headers: { "x-admin-password": password() }
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || "Unable to sync print order.");
+      await load();
+    } catch (syncError) {
+      setError(syncError instanceof Error ? syncError.message : "Unable to sync print order.");
+    } finally {
+      setSyncingPrintOrder(null);
     }
   }
 
@@ -60,12 +81,23 @@ export default function AdminPage() {
               <Metric label="Failed" value={data().failedJobs} />
               <Metric label="Revenue" value={`$${((data().revenueCents || 0) / 100).toFixed(2)}`} />
               <Metric label="Downloads" value={data().downloads} />
+              <Metric label="Print orders" value={data().printOrders} />
               <Metric label="Avg time" value={formatDuration(data().averageProcessingSeconds)} />
               <Metric label="Completed rate" value={`${Math.round((data().conversion?.completedRate || 0) * 100)}%`} />
               <Metric label="Paid rate" value={`${Math.round((data().conversion?.paidRate || 0) * 100)}%`} />
             </div>
 
             <AdminTable title="Recent jobs" rows={data().recentJobs || []} />
+            <AdminTable
+              title="Recent print orders"
+              rows={data().recentPrintOrders || []}
+              action={(row) => (
+                <Button type="button" variant="secondary" onClick={() => syncPrintOrder(row.id)} disabled={syncingPrintOrder() === row.id}>
+                  <RefreshCw size={14} />
+                  {syncingPrintOrder() === row.id ? "Syncing..." : "Sync"}
+                </Button>
+              )}
+            />
             <AdminTable title="Recent analytics" rows={data().recentAnalytics || []} />
             <AdminTable title="Recent errors" rows={data().recentErrors || []} />
           </>
@@ -84,7 +116,7 @@ function Metric(props: { label: string; value: unknown }) {
   );
 }
 
-function AdminTable(props: { title: string; rows: Record<string, unknown>[] }) {
+function AdminTable(props: { title: string; rows: Record<string, unknown>[]; action?: (row: Record<string, unknown>) => JSX.Element }) {
   const keys = () => Object.keys(props.rows[0] || {}).slice(0, 8);
   return (
     <Panel class="form-panel">
@@ -94,6 +126,7 @@ function AdminTable(props: { title: string; rows: Record<string, unknown>[] }) {
           <thead>
             <tr>
               <For each={keys()}>{(key) => <th>{key}</th>}</For>
+              <Show when={props.action}><th>Action</th></Show>
             </tr>
           </thead>
           <tbody>
@@ -103,6 +136,7 @@ function AdminTable(props: { title: string; rows: Record<string, unknown>[] }) {
                   <For each={keys()}>
                     {(key) => <td>{formatValue(row[key])}</td>}
                   </For>
+                  <Show when={props.action}>{(action) => <td>{action()(row)}</td>}</Show>
                 </tr>
               )}
             </For>

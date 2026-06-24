@@ -75,6 +75,19 @@ export type PublicJob = {
   heroHeight: number | null;
   mosaicWidth: number | null;
   mosaicHeight: number | null;
+  printOrder: PublicPrintOrder | null;
+};
+
+export type PublicPrintOrder = {
+  id: number;
+  status: string;
+  printshrimpOrderId: string | null;
+  tracking: string | null;
+  trackingCourier: string | null;
+  completed: boolean | null;
+  errorMessage: string | null;
+  createdAt: string;
+  updatedAt: string;
 };
 
 export type CreateJobInput = {
@@ -85,6 +98,23 @@ export type CreateJobInput = {
   outputDir: string;
   ipAddress?: string | null;
   metadata?: Record<string, unknown>;
+};
+
+export type PrintOrder = {
+  id: number;
+  job_id: string;
+  stripe_session_id: string;
+  external_order_number: string;
+  status: string;
+  printshrimp_order_id: string | null;
+  tracking: string | null;
+  tracking_courier: string | null;
+  completed: number | null;
+  request_payload: string | null;
+  response_payload: string | null;
+  error_message: string | null;
+  created_at: string;
+  updated_at: string;
 };
 
 export type RateLimitResult = {
@@ -229,13 +259,42 @@ export function initDb(database = getDb()): void {
       count INTEGER NOT NULL,
       PRIMARY KEY(scope, identity)
     );
+
+    CREATE TABLE IF NOT EXISTS print_orders (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      job_id TEXT NOT NULL,
+      stripe_session_id TEXT NOT NULL UNIQUE,
+      external_order_number TEXT NOT NULL UNIQUE,
+      status TEXT NOT NULL,
+      printshrimp_order_id TEXT,
+      tracking TEXT,
+      tracking_courier TEXT,
+      completed INTEGER,
+      request_payload TEXT,
+      response_payload TEXT,
+      error_message TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY(job_id) REFERENCES jobs(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_print_orders_job ON print_orders(job_id, created_at);
   `);
+  ensureColumn(database, "print_orders", "tracking", "TEXT");
+  ensureColumn(database, "print_orders", "tracking_courier", "TEXT");
+  ensureColumn(database, "print_orders", "completed", "INTEGER");
 }
 
 export function closeDb(): void {
   if (!db) return;
   db.close();
   db = null;
+}
+
+function ensureColumn(database: Database.Database, table: string, column: string, definition: string): void {
+  const columns = database.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+  if (columns.some((entry) => entry.name === column)) return;
+  database.prepare(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`).run();
 }
 
 export function createJob(input: CreateJobInput): Job {
@@ -375,6 +434,137 @@ export function markJobPaid(input: {
   });
 }
 
+export function getPrintOrderByStripeSession(sessionId: string): PrintOrder | null {
+  return (getDb().prepare("SELECT * FROM print_orders WHERE stripe_session_id = ?").get(sessionId) as PrintOrder | undefined) ?? null;
+}
+
+export function getPrintOrder(id: number): PrintOrder | null {
+  return (getDb().prepare("SELECT * FROM print_orders WHERE id = ?").get(id) as PrintOrder | undefined) ?? null;
+}
+
+export function getLatestPrintOrderForJob(jobId: string): PrintOrder | null {
+  return (getDb()
+    .prepare("SELECT * FROM print_orders WHERE job_id = ? ORDER BY created_at DESC LIMIT 1")
+    .get(jobId) as PrintOrder | undefined) ?? null;
+}
+
+export function createPrintOrder(input: {
+  jobId: string;
+  stripeSessionId: string;
+  externalOrderNumber: string;
+  requestPayload: unknown;
+}): PrintOrder {
+  const now = nowIso();
+  getDb()
+    .prepare(
+      `INSERT INTO print_orders (
+        job_id, stripe_session_id, external_order_number, status, request_payload, created_at, updated_at
+      ) VALUES (
+        @jobId, @stripeSessionId, @externalOrderNumber, 'submitting', @requestPayload, @now, @now
+      )`
+    )
+    .run({
+      jobId: input.jobId,
+      stripeSessionId: input.stripeSessionId,
+      externalOrderNumber: input.externalOrderNumber,
+      requestPayload: JSON.stringify(input.requestPayload),
+      now
+    });
+  const order = getPrintOrderByStripeSession(input.stripeSessionId);
+  if (!order) throw new Error("Print order insert failed");
+  return order;
+}
+
+export function markPrintOrderSubmitted(input: {
+  stripeSessionId: string;
+  printshrimpOrderId?: string | null;
+  responsePayload: unknown;
+  status?: string | null;
+  tracking?: string | null;
+  trackingCourier?: string | null;
+  completed?: boolean | null;
+}): void {
+  getDb()
+    .prepare(
+      `UPDATE print_orders
+       SET status = COALESCE(@status, 'submitted'),
+           printshrimp_order_id = @printshrimpOrderId,
+           tracking = @tracking,
+           tracking_courier = @trackingCourier,
+           completed = @completed,
+           response_payload = @responsePayload,
+           error_message = NULL,
+           updated_at = @updatedAt
+       WHERE stripe_session_id = @stripeSessionId`
+    )
+    .run({
+      stripeSessionId: input.stripeSessionId,
+      printshrimpOrderId: input.printshrimpOrderId ?? null,
+      status: input.status ?? null,
+      tracking: input.tracking ?? null,
+      trackingCourier: input.trackingCourier ?? null,
+      completed: input.completed == null ? null : input.completed ? 1 : 0,
+      responsePayload: JSON.stringify(input.responsePayload),
+      updatedAt: nowIso()
+    });
+}
+
+export function updatePrintOrderStatus(input: {
+  stripeSessionId: string;
+  printshrimpOrderId?: string | null;
+  status?: string | null;
+  tracking?: string | null;
+  trackingCourier?: string | null;
+  completed?: boolean | null;
+  responsePayload: unknown;
+}): void {
+  getDb()
+    .prepare(
+      `UPDATE print_orders
+       SET printshrimp_order_id = COALESCE(@printshrimpOrderId, printshrimp_order_id),
+           status = COALESCE(@status, status),
+           tracking = @tracking,
+           tracking_courier = @trackingCourier,
+           completed = @completed,
+           response_payload = @responsePayload,
+           error_message = NULL,
+           updated_at = @updatedAt
+       WHERE stripe_session_id = @stripeSessionId`
+    )
+    .run({
+      stripeSessionId: input.stripeSessionId,
+      printshrimpOrderId: input.printshrimpOrderId ?? null,
+      status: input.status ?? null,
+      tracking: input.tracking ?? null,
+      trackingCourier: input.trackingCourier ?? null,
+      completed: input.completed == null ? null : input.completed ? 1 : 0,
+      responsePayload: JSON.stringify(input.responsePayload),
+      updatedAt: nowIso()
+    });
+}
+
+export function markPrintOrderFailed(input: {
+  stripeSessionId: string;
+  errorMessage: string;
+  responsePayload?: unknown;
+}): void {
+  getDb()
+    .prepare(
+      `UPDATE print_orders
+       SET status = 'failed',
+           error_message = @errorMessage,
+           response_payload = COALESCE(@responsePayload, response_payload),
+           updated_at = @updatedAt
+       WHERE stripe_session_id = @stripeSessionId`
+    )
+    .run({
+      stripeSessionId: input.stripeSessionId,
+      errorMessage: input.errorMessage,
+      responsePayload: input.responsePayload == null ? null : JSON.stringify(input.responsePayload),
+      updatedAt: nowIso()
+    });
+}
+
 export function toPublicJob(job: Job, includeDownloadToken = false): PublicJob {
   const started = job.processing_started_at ? Date.parse(job.processing_started_at) : Number.NaN;
   const completed = job.processing_completed_at ? Date.parse(job.processing_completed_at) : Number.NaN;
@@ -411,7 +601,23 @@ export function toPublicJob(job: Job, includeDownloadToken = false): PublicJob {
     heroWidth: finiteNumber(metadata.heroWidth),
     heroHeight: finiteNumber(metadata.heroHeight),
     mosaicWidth: finiteNumber(mosaicMetadata.masterWidth),
-    mosaicHeight: finiteNumber(mosaicMetadata.masterHeight)
+    mosaicHeight: finiteNumber(mosaicMetadata.masterHeight),
+    printOrder: toPublicPrintOrder(getLatestPrintOrderForJob(job.id))
+  };
+}
+
+function toPublicPrintOrder(order: PrintOrder | null): PublicPrintOrder | null {
+  if (!order) return null;
+  return {
+    id: order.id,
+    status: order.status,
+    printshrimpOrderId: order.printshrimp_order_id,
+    tracking: order.tracking,
+    trackingCourier: order.tracking_courier,
+    completed: order.completed == null ? null : order.completed === 1,
+    errorMessage: order.error_message,
+    createdAt: order.created_at,
+    updatedAt: order.updated_at
   };
 }
 
@@ -599,6 +805,7 @@ export function getDashboardMetrics(): Record<string, unknown> {
   const failedJobs = scalar<number>("SELECT COUNT(*) AS value FROM jobs WHERE status = 'failed'");
   const paidJobs = scalar<number>("SELECT COUNT(*) AS value FROM jobs WHERE paid_at IS NOT NULL");
   const downloads = scalar<number>("SELECT COUNT(*) AS value FROM downloads WHERE completed_at IS NOT NULL");
+  const printOrders = scalar<number>("SELECT COUNT(*) AS value FROM print_orders");
   const revenueCents = scalar<number>("SELECT COALESCE(SUM(amount_paid_cents), 0) AS value FROM jobs WHERE paid_at IS NOT NULL");
   const averageProcessingSeconds = scalar<number>(
     `SELECT COALESCE(AVG((julianday(processing_completed_at) - julianday(processing_started_at)) * 86400), 0) AS value
@@ -634,6 +841,15 @@ export function getDashboardMetrics(): Record<string, unknown> {
     )
     .all();
 
+  const recentPrintOrders = database
+    .prepare(
+      `SELECT id, job_id, status, external_order_number, printshrimp_order_id, tracking, tracking_courier, completed, error_message, created_at, updated_at
+       FROM print_orders
+       ORDER BY created_at DESC
+       LIMIT 20`
+    )
+    .all();
+
   const funnel = database
     .prepare(
       `SELECT event, COUNT(*) AS count
@@ -655,12 +871,14 @@ export function getDashboardMetrics(): Record<string, unknown> {
     averageProcessingSeconds: Math.round(averageProcessingSeconds),
     revenueCents,
     downloads,
+    printOrders,
     conversion: {
       completedRate: totalJobs ? completedJobs / totalJobs : 0,
       paidRate: completedJobs ? paidJobs / completedJobs : 0
     },
     funnel,
     recentJobs,
+    recentPrintOrders,
     recentAnalytics,
     recentErrors
   };
@@ -668,5 +886,5 @@ export function getDashboardMetrics(): Record<string, unknown> {
 
 export function resetDbForTests(): void {
   const database = getDb();
-  database.exec("DELETE FROM downloads; DELETE FROM analytics_events; DELETE FROM logs; DELETE FROM rate_limits; DELETE FROM jobs;");
+  database.exec("DELETE FROM print_orders; DELETE FROM downloads; DELETE FROM analytics_events; DELETE FROM logs; DELETE FROM rate_limits; DELETE FROM jobs;");
 }

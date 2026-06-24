@@ -41,8 +41,8 @@ Set these for the full production-like flow:
 - `APP_URL`
 - `ADMIN_PASSWORD`
 - `RESEND_API_KEY`
-- `STRIPE_SECRET_KEY_DEV` / `STRIPE_WEBHOOK_SECRET_DEV`
-- `STRIPE_SECRET_KEY_PROD` / `STRIPE_WEBHOOK_SECRET_PROD`
+- `STRIPE_SECRET_KEY`
+- `STRIPE_WEBHOOK_SECRET`
 - `INSTAGRAM_RAPIDAPI_KEY`
 - `INSTAGRAM_RAPIDAPI_HOST`
 
@@ -125,14 +125,19 @@ Listen for:
 - `checkout.session.completed`
 - `checkout.session.async_payment_failed`
 
-Use separate Stripe credentials for dev/test and production/live:
+Set `STRIPE_SECRET_KEY` and `STRIPE_WEBHOOK_SECRET` per environment. Use test-mode values in development and live-mode values in production.
 
-- `STRIPE_SECRET_KEY_DEV` / `STRIPE_WEBHOOK_SECRET_DEV`
-- `STRIPE_SECRET_KEY_PROD` / `STRIPE_WEBHOOK_SECRET_PROD`
+## Print fulfillment
 
-The app chooses the prod pair when `NODE_ENV=production`; otherwise it chooses the dev pair. `STRIPE_SECRET_KEY` and `STRIPE_WEBHOOK_SECRET` still work as fallbacks for single-environment deploys.
+Physical print orders use Stripe Checkout to collect payment and shipping details. After `checkout.session.completed`, the webhook submits the completed 24x36 master artwork to Print Shrimp in URL mode.
 
-Copy the webhook signing secret for each Stripe webhook endpoint into the matching webhook env var.
+Configure:
+
+```text
+PRINTSHRIMP_API_KEY=...
+```
+
+The Print Shrimp API base URL is hardcoded to `https://api.printshrimp.com/functions/v1`. The Print Shrimp artwork URL is generated from the job download token and points at `/api/artwork/:token`.
 
 ## Admin
 
@@ -153,6 +158,7 @@ storage/
     master-24x36.jpg
     preview-social-1080x1350.jpg
     preview-square-1080x1080.jpg
+    print-20x30.jpg
     print-18x24.jpg
     print-12x18.jpg
     wallpaper-phone.jpg

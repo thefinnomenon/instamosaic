@@ -1,7 +1,8 @@
 import Stripe from "stripe";
 import type { APIEvent } from "@solidjs/start/server";
-import { getJob, getJobByStripeSession, logError, markJobPaid, trackEvent } from "@instamosaic/db";
+import { createPrintOrder, getJob, getJobByStripeSession, getPrintOrderByStripeSession, logError, markJobPaid, markPrintOrderSubmitted, trackEvent } from "@instamosaic/db";
 import { sendDigitalPurchaseEmail } from "@instamosaic/worker";
+import { submitPrintShrimpOrder } from "../../../lib/printshrimp.ts";
 import { errorJson, json } from "../../../lib/server.ts";
 import { stripeSecretKey, stripeWebhookSecret } from "../../../lib/stripe.ts";
 
@@ -26,6 +27,17 @@ export async function POST({ request }: APIEvent): Promise<Response> {
     const session = event.data.object as Stripe.Checkout.Session;
     const job = (session.metadata?.jobId ? getJob(session.metadata.jobId) : null) || getJobByStripeSession(session.id);
     if (job) {
+      if (session.metadata?.product === "physical_print") {
+        trackEvent({ event: "stripe_checkout_completed", jobId: job.id, user: job.email, metadata: { sessionId: session.id, product: "physical_print" } });
+        if (!session.livemode) {
+          recordTestPrintOrder(job.id, session);
+          trackEvent({ event: "printshrimp_order_skipped_test_mode", jobId: job.id, user: job.email, metadata: { sessionId: session.id, product: "physical_print" } });
+          return json({ received: true, printShrimpSkipped: "test_mode" });
+        }
+        await submitPrintShrimpOrder(job, session);
+        return json({ received: true });
+      }
+
       const wasAlreadyPaid = Boolean(job.paid_at);
       const paidJob = markJobPaid({
         jobId: job.id,
@@ -56,4 +68,26 @@ export async function POST({ request }: APIEvent): Promise<Response> {
   }
 
   return json({ received: true });
+}
+
+function recordTestPrintOrder(jobId: string, session: Stripe.Checkout.Session): void {
+  if (!getPrintOrderByStripeSession(session.id)) {
+    createPrintOrder({
+      jobId,
+      stripeSessionId: session.id,
+      externalOrderNumber: `test-instamosaic-${jobId}-${session.id}`,
+      requestPayload: {
+        testMode: true,
+        printSize: session.metadata?.printSize ?? null,
+        printType: session.metadata?.printType ?? null,
+        frameColor: session.metadata?.frameColor ?? null
+      }
+    });
+  }
+  markPrintOrderSubmitted({
+    stripeSessionId: session.id,
+    status: "test_mode",
+    responsePayload: { testMode: true, message: "Stripe test checkout completed. PrintShrimp order was not submitted." },
+    completed: false
+  });
 }

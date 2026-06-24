@@ -1,7 +1,8 @@
 import { A, useLocation, useParams } from "@solidjs/router";
-import { Clock, CreditCard, Download, LoaderCircle, Maximize2, Minus, Plus, Printer, XCircle } from "lucide-solid";
+import { Clock, CreditCard, Download, LoaderCircle, Maximize2, Minus, Plus, Printer, X, XCircle } from "lucide-solid";
 import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from "solid-js";
 import { Badge, Button, Panel, trackUiEvent } from "../../../components/ui.tsx";
+import { PRINT_PRICES, formatUsd, printPriceCents, printShippingEstimate } from "../../../lib/print-pricing.ts";
 
 type PublicJob = {
   id: string;
@@ -25,12 +26,26 @@ type PublicJob = {
   errorMessage: string | null;
   paid: boolean;
   downloadToken?: string;
+  printOrder: PublicPrintOrder | null;
+};
+
+type PublicPrintOrder = {
+  id: number;
+  status: string;
+  printshrimpOrderId: string | null;
+  tracking: string | null;
+  trackingCourier: string | null;
+  completed: boolean | null;
+  errorMessage: string | null;
+  createdAt: string;
+  updatedAt: string;
 };
 
 const tileCells = Array.from({ length: 80 });
 const MIN_ZOOM = 50;
 const MAX_ZOOM = 1000;
 const ZOOM_STEP = 50;
+const FRAME_COLORS = ["Black", "White", "Oak"];
 
 export default function StatusPage() {
   const params = useParams();
@@ -48,6 +63,13 @@ export default function StatusPage() {
   const [confirmingCheckout, setConfirmingCheckout] = createSignal(false);
   const [downloadLoading, setDownloadLoading] = createSignal(false);
   const [downloadMessage, setDownloadMessage] = createSignal("");
+  const [printLoading, setPrintLoading] = createSignal(false);
+  const [printMessage, setPrintMessage] = createSignal("");
+  const [printModalOpen, setPrintModalOpen] = createSignal(false);
+  const [printSize, setPrintSize] = createSignal("20x30");
+  const [printFramed, setPrintFramed] = createSignal(false);
+  const [printFrameColor, setPrintFrameColor] = createSignal("Black");
+  const selectedPrintPrice = createMemo(() => printPriceCents(printSize(), printFramed()));
   // Starts at 0 so the bar animates in from the left on first render.
   const [displayedProgress, setDisplayedProgress] = createSignal(0);
   createEffect(() => {
@@ -204,6 +226,34 @@ export default function StatusPage() {
       setDownloadMessage(downloadError instanceof Error ? downloadError.message : "Unable to download the digital file.");
     } finally {
       setDownloadLoading(false);
+    }
+  }
+
+  async function checkoutPrint() {
+    const current = job();
+    if (!current || printLoading()) return;
+    setPrintLoading(true);
+    setPrintMessage("");
+    void trackUiEvent("checkout_clicked", { product: "physical_print" }, current.id);
+
+    try {
+      const response = await fetch("/api/stripe/print-checkout", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          jobId: current.id,
+          size: printSize(),
+          framed: printFramed(),
+          frameColor: printFrameColor()
+        })
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "Unable to start print checkout.");
+      window.location.href = data.url;
+    } catch (printError) {
+      setPrintMessage(printError instanceof Error ? printError.message : "Unable to start print checkout.");
+    } finally {
+      setPrintLoading(false);
     }
   }
 
@@ -380,9 +430,9 @@ export default function StatusPage() {
                         {downloadLoading() ? "Preparing Download..." : "Download Digital"}
                       </Button>
                     </Show>
-                    <Button type="button" variant="secondary" disabled>
+                    <Button type="button" variant="secondary" onClick={() => setPrintModalOpen(true)}>
                       <Printer size={16} />
-                      Order Physical Print
+                      Order Print
                     </Button>
                   </div>
                   <Show when={checkoutMessage()}>
@@ -390,6 +440,29 @@ export default function StatusPage() {
                   </Show>
                   <Show when={downloadMessage()}>
                     <p class="message" role="alert">{downloadMessage()}</p>
+                  </Show>
+                  <Show when={printMessage()}>
+                    <p class="message" role="alert">{printMessage()}</p>
+                  </Show>
+
+                  <Show when={current().printOrder}>
+                    {(order) => (
+                      <div class="print-order-card">
+                        <div>
+                          <span>Print order</span>
+                          <strong>{printOrderTitle(order())}</strong>
+                        </div>
+                        <p>{printOrderMessage(order())}</p>
+                        <Show when={order().tracking}>
+                          {(tracking) => (
+                            <p>
+                              Tracking: <strong>{tracking()}</strong>
+                              <Show when={order().trackingCourier}> via {order().trackingCourier}</Show>
+                            </p>
+                          )}
+                        </Show>
+                      </div>
+                    )}
                   </Show>
                 </div>
               </Show>
@@ -405,6 +478,61 @@ export default function StatusPage() {
           <p class="message message-inline"><Clock size={18} /> This page updates automatically, and we'll email you when your mosaic is ready.</p>
         </Show>
       </Panel>
+
+      <Show when={printModalOpen()}>
+        <div class="modal-backdrop" role="presentation" onClick={() => !printLoading() && setPrintModalOpen(false)}>
+          <div class="modal" role="dialog" aria-modal="true" aria-labelledby="print-modal-title" onClick={(event) => event.stopPropagation()}>
+            <div class="modal-header">
+              <div>
+                <p class="eyebrow">Physical print</p>
+                <h2 id="print-modal-title">Order Print</h2>
+              </div>
+              <Button type="button" variant="ghost" class="icon-button" onClick={() => setPrintModalOpen(false)} disabled={printLoading()} aria-label="Close print options">
+                <X size={18} />
+              </Button>
+            </div>
+
+            <div class="modal-form">
+              <label class="label">
+                Size
+                <select class="field" value={printSize()} onChange={(event) => setPrintSize(event.currentTarget.value)}>
+                  <For each={PRINT_PRICES}>{(price) => <option value={price.size}>{price.label}</option>}</For>
+                </select>
+              </label>
+
+              <label class="checkbox-row">
+                <input type="checkbox" checked={printFramed()} onChange={(event) => setPrintFramed(event.currentTarget.checked)} />
+                <span>Add frame</span>
+              </label>
+
+              <Show when={printFramed()}>
+                <label class="label">
+                  Frame color
+                  <select class="field" value={printFrameColor()} onChange={(event) => setPrintFrameColor(event.currentTarget.value)}>
+                    <For each={FRAME_COLORS}>{(color) => <option value={color}>{color}</option>}</For>
+                  </select>
+                </label>
+              </Show>
+
+              <div class="print-price-card">
+                <span>Total</span>
+                <strong>{formatUsd(selectedPrintPrice())}</strong>
+              </div>
+              <p class="message">All prints use matte paper and include standard shipping. {printShippingEstimate()}</p>
+            </div>
+
+            <div class="modal-actions">
+              <Button type="button" variant="secondary" onClick={() => setPrintModalOpen(false)} disabled={printLoading()}>
+                Cancel
+              </Button>
+              <Button type="button" onClick={checkoutPrint} disabled={printLoading()}>
+                <Printer size={16} />
+                {printLoading() ? "Opening checkout..." : "Continue to Checkout"}
+              </Button>
+            </div>
+          </div>
+        </div>
+      </Show>
     </div>
   );
 }
@@ -459,6 +587,28 @@ function formatPhotoCoverage(oldest: string | null, newest: string | null): stri
   const months = Math.round((diffDays % 365) / 30);
   const duration = years > 0 ? `${years}y${months > 0 ? ` ${months}mo` : ""}` : `${Math.max(1, months)}mo`;
   return `${duration} (${oldestLabel} - ${newestLabel})`;
+}
+
+function printOrderTitle(order: PublicPrintOrder): string {
+  if (order.status === "test_mode") return "Test order received";
+  if (order.status === "failed") return "Print order needs attention";
+  if (order.completed) return "Delivered";
+  if (order.tracking) return "Shipped";
+  if (order.status) return titleCase(order.status);
+  return "Order received";
+}
+
+function printOrderMessage(order: PublicPrintOrder): string {
+  if (order.status === "test_mode") return "Stripe test checkout completed. No real PrintShrimp order was submitted.";
+  if (order.status === "failed") return order.errorMessage || "We could not submit this order to the printer.";
+  if (order.completed) return "Your print has been marked complete.";
+  if (order.tracking) return "Your print has shipped.";
+  if (order.printshrimpOrderId) return "Your print order was sent to the printer. Tracking will appear here when available.";
+  return "Your print order was received. Tracking will appear here when available.";
+}
+
+function titleCase(value: string): string {
+  return value.replace(/[_-]+/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
 function formatMonthYear(timestamp: number): string {

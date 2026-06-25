@@ -65,6 +65,8 @@ export default function StatusPage() {
   const [downloadMessage, setDownloadMessage] = createSignal("");
   const [revealLoading, setRevealLoading] = createSignal(false);
   const [revealMessage, setRevealMessage] = createSignal("");
+  const [preloadedRevealBlob, setPreloadedRevealBlob] = createSignal<Blob | null>(null);
+  const [preloadedRevealUrl, setPreloadedRevealUrl] = createSignal("");
   const [shareModalOpen, setShareModalOpen] = createSignal(false);
   const [printLoading, setPrintLoading] = createSignal(false);
   const [printMessage, setPrintMessage] = createSignal("");
@@ -96,6 +98,7 @@ export default function StatusPage() {
     if (!token || typeof window === "undefined") return "";
     return `${window.location.origin}/api/download/${token}/reveal`;
   });
+  const revealPreviewUrl = createMemo(() => preloadedRevealUrl() || revealVideoUrl());
 
   async function load() {
     try {
@@ -122,6 +125,38 @@ export default function StatusPage() {
     onCleanup(() => {
       window.clearInterval(interval);
     });
+  });
+
+  createEffect(() => {
+    const current = job();
+    const url = revealVideoUrl();
+    if (!current?.downloadToken || current.status !== "completed" || !url || preloadedRevealBlob()) return;
+
+    const controller = new AbortController();
+    fetch(`${url}?preload=1`, { signal: controller.signal })
+      .then(async (response) => {
+        if (!response.ok) throw new Error("Reveal video is not ready yet.");
+        return response.blob();
+      })
+      .then((blob) => {
+        if (controller.signal.aborted) return;
+        const existingUrl = preloadedRevealUrl();
+        if (existingUrl) URL.revokeObjectURL(existingUrl);
+        setPreloadedRevealBlob(blob);
+        setPreloadedRevealUrl(URL.createObjectURL(blob));
+      })
+      .catch((error) => {
+        if (!(error instanceof DOMException && error.name === "AbortError")) {
+          console.warn("Unable to preload reveal video.", error);
+        }
+      });
+
+    onCleanup(() => controller.abort());
+  });
+
+  onCleanup(() => {
+    const objectUrl = preloadedRevealUrl();
+    if (objectUrl) URL.revokeObjectURL(objectUrl);
   });
 
   function zoomBy(delta: number, clientX?: number, clientY?: number) {
@@ -271,46 +306,46 @@ export default function StatusPage() {
     const current = job();
     const url = revealVideoUrl();
     if (!current?.downloadToken || !url || revealLoading()) return;
-    setRevealLoading(true);
     setRevealMessage("");
     void trackUiEvent("share_reveal_clicked", {}, current.id);
 
     try {
-      const response = await fetch(url);
-      if (!response.ok) {
-        const data = await response.json().catch(() => ({})) as { error?: string };
-        throw new Error(data.error || "Reveal video is not ready yet.");
-      }
-
-      const blob = await response.blob();
-      const file = new File([blob], `instamosaic-${current.username}-reveal.mp4`, { type: "video/mp4" });
-      const shareData = {
-        title: `InstaMosaic for @${current.username}`,
-        text: `Built from ${current.photosUsed || current.downloadedCount} Instagram photos.`,
-        files: [file]
-      };
-
-      if (navigator.canShare?.(shareData)) {
-        await navigator.share(shareData);
-        return;
+      const shareTitle = `InstaMosaic for @${current.username}`;
+      const shareText = `Built from ${current.photosUsed || current.downloadedCount} Instagram photos.`;
+      const blob = preloadedRevealBlob();
+      if (blob) {
+        const file = new File([blob], `instamosaic-${current.username}-reveal.mp4`, { type: "video/mp4" });
+        const fileShareData = {
+          title: shareTitle,
+          text: shareText,
+          files: [file]
+        };
+        if (navigator.canShare?.(fileShareData)) {
+          await navigator.share(fileShareData);
+          return;
+        }
       }
 
       if (navigator.share) {
         await navigator.share({
-          title: shareData.title,
-          text: "Download the reveal video and share it to Instagram, TikTok, or YouTube Shorts.",
+          title: shareTitle,
+          text: shareText,
           url
         });
         return;
       }
 
+      setRevealLoading(true);
+      try {
+        await fetchRevealVideoBlob(url);
+      } finally {
+        setRevealLoading(false);
+      }
       await copyToClipboard(url);
       setRevealMessage("Reveal video link copied.");
     } catch (shareError) {
       if (shareError instanceof DOMException && shareError.name === "AbortError") return;
       setRevealMessage(shareError instanceof Error ? shareError.message : "Unable to share the reveal video.");
-    } finally {
-      setRevealLoading(false);
     }
   }
 
@@ -597,11 +632,9 @@ export default function StatusPage() {
 
             <div class="modal-form">
               <Show when={revealVideoUrl()}>
-                {(url) => (
-                  <div class="share-video-preview">
-                    <video src={url()} controls playsinline preload="metadata" />
-                  </div>
-                )}
+                <div class="share-video-preview">
+                  <video src={revealPreviewUrl()} controls playsinline preload="auto" />
+                </div>
               </Show>
               <div class="share-action-grid">
                 <Button type="button" onClick={shareRevealVideo} disabled={revealLoading()}>
@@ -774,6 +807,15 @@ async function copyToClipboard(value: string): Promise<void> {
   textarea.select();
   document.execCommand("copy");
   textarea.remove();
+}
+
+async function fetchRevealVideoBlob(url: string): Promise<Blob> {
+  const response = await fetch(url);
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({})) as { error?: string };
+    throw new Error(data.error || "Reveal video is not ready yet.");
+  }
+  return response.blob();
 }
 
 function formatMonthYear(timestamp: number): string {

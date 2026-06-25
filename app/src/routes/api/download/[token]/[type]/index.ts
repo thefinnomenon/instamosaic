@@ -38,9 +38,13 @@ export async function GET({ params, request }: APIEvent): Promise<Response> {
   if (outputType === "reveal") {
     const filePath = path.join(job.output_dir, REVEAL_VIDEO_FILENAME);
     if (!existsSync(filePath)) return errorJson("Reveal video is not ready.", 404);
-    const downloadId = recordDownloadStarted({ jobId: job.id, token: job.download_token, outputType, ip });
-    const response = await fileResponse(filePath, `instamosaic-${job.username}-${REVEAL_VIDEO_FILENAME}`, "video/mp4", "inline");
-    recordDownloadCompleted(downloadId, job.id, outputType, ip);
+    const isPreload = new URL(request.url).searchParams.get("preload") === "1";
+    const downloadId = isPreload ? null : recordDownloadStarted({ jobId: job.id, token: job.download_token, outputType, ip });
+    const response = await fileResponse(filePath, `instamosaic-${job.username}-${REVEAL_VIDEO_FILENAME}`, "video/mp4", {
+      disposition: "inline",
+      cacheControl: "public, max-age=86400, immutable"
+    });
+    if (downloadId) recordDownloadCompleted(downloadId, job.id, outputType, ip);
     return response;
   }
 
@@ -80,13 +84,19 @@ function zipResponse(outputDir: string, filename: string): Response {
   });
 }
 
-async function fileResponse(filePath: string, filename: string, contentType: string, disposition: "attachment" | "inline" = "attachment"): Promise<Response> {
+async function fileResponse(
+  filePath: string,
+  filename: string,
+  contentType: string,
+  options: { disposition?: "attachment" | "inline"; cacheControl?: string } = {}
+): Promise<Response> {
   const body = await readFile(filePath);
+  const disposition = options.disposition ?? "attachment";
   return new Response(body, {
     headers: {
       "Content-Type": contentType,
       "Content-Disposition": `${disposition}; filename="${filename.replaceAll('"', "")}"`,
-      "Cache-Control": "private, no-store"
+      "Cache-Control": options.cacheControl ?? "private, no-store"
     }
   });
 }

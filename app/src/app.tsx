@@ -9,6 +9,9 @@ export default function App() {
       root={(props) => (
         <main class="app-shell">
           <Suspense>{props.children}</Suspense>
+          <footer class="app-footer">
+            <a href="mailto:chris@finnternet.com">Contact Us</a>
+          </footer>
         </main>
       )}
     >

@@ -28,6 +28,9 @@ export async function GET({ params, request }: APIEvent): Promise<Response> {
   const job = token ? getJobByDownloadToken(token) : null;
   if (!job || job.status !== "completed") return errorJson("Download is not ready.", 403);
 
+  // Reveal video is always free. All other downloads require payment.
+  if (outputType !== "reveal" && !job.paid_at) return errorJson("Download is locked.", 403);
+
   if (outputType === "bundle") {
     const downloadId = recordDownloadStarted({ jobId: job.id, token: job.download_token, outputType, ip });
     const response = zipResponse(job.output_dir, `instamosaic-${job.username}-digital-files.zip`);

@@ -29,6 +29,23 @@ export async function POST({ request }: APIEvent): Promise<Response> {
     if (job) {
       if (session.metadata?.product === "physical_print") {
         trackEvent({ event: "stripe_checkout_completed", jobId: job.id, user: job.email, metadata: { sessionId: session.id, product: "physical_print" } });
+        // Unlock digital files as part of print purchase.
+        const wasAlreadyPaid = Boolean(job.paid_at);
+        const paidJob = markJobPaid({
+          jobId: job.id,
+          stripeSessionId: session.id,
+          amountPaidCents: session.amount_total ?? null,
+          currency: session.currency ?? null
+        });
+        if (!wasAlreadyPaid) {
+          await sendDigitalPurchaseEmail({
+            to: paidJob.email,
+            jobId: paidJob.id,
+            username: paidJob.username,
+            amountPaidCents: session.amount_total ?? null,
+            currency: session.currency ?? null
+          });
+        }
         if (!session.livemode) {
           recordTestPrintOrder(job.id, session);
           trackEvent({ event: "printshrimp_order_skipped_test_mode", jobId: job.id, user: job.email, metadata: { sessionId: session.id, product: "physical_print" } });

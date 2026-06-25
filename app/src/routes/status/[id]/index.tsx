@@ -555,16 +555,21 @@ export default function StatusPage() {
                   </div>
 
                   <div class="result-actions">
-                    <Show when={current().downloadToken}>
+                    <Show when={current().paid} fallback={
+                      <Button type="button" onClick={checkoutDigital} disabled={checkoutLoading()}>
+                        <CreditCard size={16} />
+                        {checkoutLoading() ? "Opening checkout..." : "Buy Digital Files — $4.99"}
+                      </Button>
+                    }>
                       <Button type="button" onClick={downloadDigital} disabled={downloadLoading()}>
                         <Download size={16} />
                         {downloadLoading() ? "Preparing Download..." : "Download Digital Files"}
                       </Button>
-                      <Button type="button" variant="secondary" onClick={() => setShareModalOpen(true)}>
-                        <Share2 size={16} />
-                        Share Video
-                      </Button>
                     </Show>
+                    <Button type="button" variant="secondary" onClick={() => setShareModalOpen(true)}>
+                      <Share2 size={16} />
+                      Share Video
+                    </Button>
                     <Button type="button" variant="secondary" onClick={() => setPrintModalOpen(true)}>
                       <Printer size={16} />
                       Order Print
@@ -700,7 +705,7 @@ export default function StatusPage() {
                 <span>Total</span>
                 <strong>{formatUsd(selectedPrintPrice())}</strong>
               </div>
-              <p class="message">All prints use matte paper and include standard shipping. {printShippingEstimate()}</p>
+              <p class="message">All prints use matte paper and include standard shipping. {printShippingEstimate()} Also includes your digital file download and social video.</p>
             </div>
 
             <div class="modal-actions">

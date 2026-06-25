@@ -1,5 +1,5 @@
 :root {
-  color-scheme: light;
+  color-scheme: light dark;
   --bg: #f6f7f4;
   --ink: #17202a;
   --muted: #667085;
@@ -41,6 +41,26 @@ a {
 
 .app-shell {
   min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.app-footer {
+  margin-top: auto;
+  padding: 20px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.app-footer a {
+  color: var(--muted);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.app-footer a:hover {
+  color: var(--ink);
 }
 
 .page {
@@ -1051,5 +1071,113 @@ td {
 
   .admin-grid {
     grid-template-columns: 1fr;
+  }
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #111a16;
+    --ink: #e2ebe5;
+    --muted: #7a9185;
+    --line: #273530;
+    --panel: #19241f;
+    --panel-soft: #1e2b25;
+    --primary: #2068a8;
+    --primary-strong: #185890;
+    --success: #1fa05e;
+    --warning: #c47a10;
+    --danger: #c44242;
+    --shadow: 0 22px 60px rgba(0, 0, 0, 0.5);
+  }
+
+  body {
+    background:
+      linear-gradient(135deg, rgba(22, 60, 90, 0.22), transparent 38%),
+      linear-gradient(320deg, rgba(225, 91, 67, 0.12), transparent 42%),
+      var(--bg);
+  }
+
+  .panel {
+    background: rgba(25, 36, 31, 0.95);
+  }
+
+  .field {
+    border-color: #2e3f38;
+    background: #141e1a;
+    color: var(--ink);
+  }
+
+  .field:focus {
+    box-shadow: 0 0 0 3px rgba(32, 104, 168, 0.22);
+  }
+
+  .file-drop {
+    border-color: #2e3f38;
+  }
+
+  .button-secondary {
+    border-color: #2e3f38;
+    background: var(--panel-soft);
+    color: var(--ink);
+  }
+
+  .status-box {
+    background: #161f1b;
+  }
+
+  .modal {
+    background: var(--panel);
+  }
+
+  .print-price-card {
+    background: #1a2520;
+    border-color: #273a30;
+  }
+
+  .print-price-card span {
+    color: var(--muted);
+  }
+
+  .print-price-card strong {
+    color: var(--ink);
+  }
+
+  .print-order-card {
+    background: #1a2520;
+    border-color: #273a30;
+  }
+
+  .print-order-card span {
+    color: var(--muted);
+  }
+
+  .print-order-card strong {
+    color: var(--ink);
+  }
+
+  .print-order-card p {
+    color: var(--muted);
+  }
+
+  .metric {
+    background: var(--panel);
+  }
+
+  .badge-neutral {
+    background: #253228;
+    color: #aabfb2;
+  }
+
+  .progress-shell {
+    background: #253228;
+  }
+
+  .preview-art {
+    background:
+      linear-gradient(90deg, rgba(255, 255, 255, 0.22) 1px, transparent 1px),
+      linear-gradient(0deg, rgba(255, 255, 255, 0.22) 1px, transparent 1px),
+      url("/mosaic-sample.jpg");
+    background-size: 32px 32px, 32px 32px, cover;
+    background-position: center;
   }
 }

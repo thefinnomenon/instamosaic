@@ -18,6 +18,7 @@
     "test:check": "tsx scripts/test-check.ts",
     "test:download": "tsx scripts/test-download.ts",
     "test:mosaic": "tsx scripts/test-mosaic.ts",
+    "test:reveal": "tsx scripts/test-reveal-video.ts",
     "test:pipeline": "tsx scripts/test-pipeline.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },

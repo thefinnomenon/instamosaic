@@ -1,4 +1,6 @@
 import path from "node:path";
+import { existsSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import { PassThrough, Readable } from "node:stream";
 import type { APIEvent } from "@solidjs/start/server";
 import { ZipArchive } from "archiver";
@@ -10,6 +12,8 @@ import {
   recordDownloadStarted
 } from "@instamosaic/db";
 import { errorJson, getClientIp, imageResponse, rateLimitResponse, shouldBypassRateLimit } from "../../../../../lib/server.ts";
+
+const REVEAL_VIDEO_FILENAME = "reveal.mp4";
 
 export async function GET({ params, request }: APIEvent): Promise<Response> {
   const token = params.token;
@@ -27,6 +31,15 @@ export async function GET({ params, request }: APIEvent): Promise<Response> {
   if (outputType === "bundle") {
     const downloadId = recordDownloadStarted({ jobId: job.id, token: job.download_token, outputType, ip });
     const response = zipResponse(job.output_dir, `instamosaic-${job.username}-digital-files.zip`);
+    recordDownloadCompleted(downloadId, job.id, outputType, ip);
+    return response;
+  }
+
+  if (outputType === "reveal") {
+    const filePath = path.join(job.output_dir, REVEAL_VIDEO_FILENAME);
+    if (!existsSync(filePath)) return errorJson("Reveal video is not ready.", 404);
+    const downloadId = recordDownloadStarted({ jobId: job.id, token: job.download_token, outputType, ip });
+    const response = await fileResponse(filePath, `instamosaic-${job.username}-${REVEAL_VIDEO_FILENAME}`, "video/mp4", "inline");
     recordDownloadCompleted(downloadId, job.id, outputType, ip);
     return response;
   }
@@ -52,6 +65,8 @@ function zipResponse(outputDir: string, filename: string): Response {
   for (const output of Object.values(downloadOutputTypes)) {
     archive.file(path.join(outputDir, output.filename), { name: output.filename });
   }
+  const revealPath = path.join(outputDir, REVEAL_VIDEO_FILENAME);
+  if (existsSync(revealPath)) archive.file(revealPath, { name: REVEAL_VIDEO_FILENAME });
 
   archive.pipe(stream);
   void archive.finalize();
@@ -60,6 +75,17 @@ function zipResponse(outputDir: string, filename: string): Response {
     headers: {
       "Content-Type": "application/zip",
       "Content-Disposition": `attachment; filename="${filename}"`,
+      "Cache-Control": "private, no-store"
+    }
+  });
+}
+
+async function fileResponse(filePath: string, filename: string, contentType: string, disposition: "attachment" | "inline" = "attachment"): Promise<Response> {
+  const body = await readFile(filePath);
+  return new Response(body, {
+    headers: {
+      "Content-Type": contentType,
+      "Content-Disposition": `${disposition}; filename="${filename.replaceAll('"', "")}"`,
       "Cache-Control": "private, no-store"
     }
   });

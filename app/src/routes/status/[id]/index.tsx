@@ -1,5 +1,5 @@
 import { A, useLocation, useParams } from "@solidjs/router";
-import { Clock, CreditCard, Download, LoaderCircle, Maximize2, Minus, Plus, Printer, X, XCircle } from "lucide-solid";
+import { Clock, Copy, CreditCard, Download, LoaderCircle, Maximize2, Minus, Plus, Printer, Share2, X, XCircle } from "lucide-solid";
 import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from "solid-js";
 import { Badge, Button, Panel, trackUiEvent } from "../../../components/ui.tsx";
 import { PRINT_PRICES, formatUsd, printPriceCents, printShippingEstimate } from "../../../lib/print-pricing.ts";
@@ -63,6 +63,9 @@ export default function StatusPage() {
   const [confirmingCheckout, setConfirmingCheckout] = createSignal(false);
   const [downloadLoading, setDownloadLoading] = createSignal(false);
   const [downloadMessage, setDownloadMessage] = createSignal("");
+  const [revealLoading, setRevealLoading] = createSignal(false);
+  const [revealMessage, setRevealMessage] = createSignal("");
+  const [shareModalOpen, setShareModalOpen] = createSignal(false);
   const [printLoading, setPrintLoading] = createSignal(false);
   const [printMessage, setPrintMessage] = createSignal("");
   const [printModalOpen, setPrintModalOpen] = createSignal(false);
@@ -88,6 +91,11 @@ export default function StatusPage() {
   });
   const imageKind = createMemo(() => job()?.status === "completed" ? "master" : "hero");
   const checkoutSucceeded = createMemo(() => new URLSearchParams(location.search).get("checkout") === "success");
+  const revealVideoUrl = createMemo(() => {
+    const token = job()?.downloadToken;
+    if (!token || typeof window === "undefined") return "";
+    return `${window.location.origin}/api/download/${token}/reveal`;
+  });
 
   async function load() {
     try {
@@ -226,6 +234,94 @@ export default function StatusPage() {
       setDownloadMessage(downloadError instanceof Error ? downloadError.message : "Unable to download the digital file.");
     } finally {
       setDownloadLoading(false);
+    }
+  }
+
+  async function downloadRevealVideo() {
+    const current = job();
+    if (!current?.downloadToken || revealLoading()) return;
+    setRevealLoading(true);
+    setRevealMessage("");
+
+    try {
+      const response = await fetch(`/api/download/${current.downloadToken}/reveal`);
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({})) as { error?: string };
+        throw new Error(data.error || "Reveal video is not ready yet.");
+      }
+
+      const blob = await response.blob();
+      const objectUrl = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = objectUrl;
+      link.download = filenameFromContentDisposition(response.headers.get("Content-Disposition")) || `instamosaic-${current.username}-reveal.mp4`;
+      link.style.display = "none";
+      document.body.append(link);
+      link.click();
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+    } catch (downloadError) {
+      setRevealMessage(downloadError instanceof Error ? downloadError.message : "Reveal video is not ready yet.");
+    } finally {
+      setRevealLoading(false);
+    }
+  }
+
+  async function shareRevealVideo() {
+    const current = job();
+    const url = revealVideoUrl();
+    if (!current?.downloadToken || !url || revealLoading()) return;
+    setRevealLoading(true);
+    setRevealMessage("");
+    void trackUiEvent("share_reveal_clicked", {}, current.id);
+
+    try {
+      const response = await fetch(url);
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({})) as { error?: string };
+        throw new Error(data.error || "Reveal video is not ready yet.");
+      }
+
+      const blob = await response.blob();
+      const file = new File([blob], `instamosaic-${current.username}-reveal.mp4`, { type: "video/mp4" });
+      const shareData = {
+        title: `InstaMosaic for @${current.username}`,
+        text: `Built from ${current.photosUsed || current.downloadedCount} Instagram photos.`,
+        files: [file]
+      };
+
+      if (navigator.canShare?.(shareData)) {
+        await navigator.share(shareData);
+        return;
+      }
+
+      if (navigator.share) {
+        await navigator.share({
+          title: shareData.title,
+          text: "Download the reveal video and share it to Instagram, TikTok, or YouTube Shorts.",
+          url
+        });
+        return;
+      }
+
+      await copyToClipboard(url);
+      setRevealMessage("Reveal video link copied.");
+    } catch (shareError) {
+      if (shareError instanceof DOMException && shareError.name === "AbortError") return;
+      setRevealMessage(shareError instanceof Error ? shareError.message : "Unable to share the reveal video.");
+    } finally {
+      setRevealLoading(false);
+    }
+  }
+
+  async function copyRevealLink() {
+    const url = revealVideoUrl();
+    if (!url) return;
+    try {
+      await copyToClipboard(url);
+      setRevealMessage("Reveal video link copied.");
+    } catch {
+      setRevealMessage("Unable to copy the reveal video link.");
     }
   }
 
@@ -427,7 +523,11 @@ export default function StatusPage() {
                     <Show when={current().downloadToken}>
                       <Button type="button" onClick={downloadDigital} disabled={downloadLoading()}>
                         <Download size={16} />
-                        {downloadLoading() ? "Preparing Download..." : "Download Digital"}
+                        {downloadLoading() ? "Preparing Download..." : "Download Digital Files"}
+                      </Button>
+                      <Button type="button" variant="secondary" onClick={() => setShareModalOpen(true)}>
+                        <Share2 size={16} />
+                        Share Video
                       </Button>
                     </Show>
                     <Button type="button" variant="secondary" onClick={() => setPrintModalOpen(true)}>
@@ -440,6 +540,9 @@ export default function StatusPage() {
                   </Show>
                   <Show when={downloadMessage()}>
                     <p class="message" role="alert">{downloadMessage()}</p>
+                  </Show>
+                  <Show when={revealMessage()}>
+                    <p class="message" role="alert">{revealMessage()}</p>
                   </Show>
                   <Show when={printMessage()}>
                     <p class="message" role="alert">{printMessage()}</p>
@@ -478,6 +581,52 @@ export default function StatusPage() {
           <p class="message message-inline"><Clock size={18} /> This page updates automatically, and we'll email you when your mosaic is ready.</p>
         </Show>
       </Panel>
+
+      <Show when={shareModalOpen()}>
+        <div class="modal-backdrop" role="presentation" onClick={() => !revealLoading() && setShareModalOpen(false)}>
+          <div class="modal" role="dialog" aria-modal="true" aria-labelledby="share-modal-title" onClick={(event) => event.stopPropagation()}>
+            <div class="modal-header">
+              <div>
+                <p class="eyebrow">Social video</p>
+                <h2 id="share-modal-title">Share Video</h2>
+              </div>
+              <Button type="button" variant="ghost" class="icon-button" onClick={() => setShareModalOpen(false)} disabled={revealLoading()} aria-label="Close share options">
+                <X size={18} />
+              </Button>
+            </div>
+
+            <div class="modal-form">
+              <Show when={revealVideoUrl()}>
+                {(url) => (
+                  <div class="share-video-preview">
+                    <video src={url()} controls playsinline preload="metadata" />
+                  </div>
+                )}
+              </Show>
+              <div class="share-action-grid">
+                <Button type="button" onClick={shareRevealVideo} disabled={revealLoading()}>
+                  <Share2 size={16} />
+                  {revealLoading() ? "Preparing Video..." : "Share Video"}
+                </Button>
+                <Button type="button" variant="secondary" onClick={downloadRevealVideo} disabled={revealLoading()}>
+                  <Download size={16} />
+                  Download MP4
+                </Button>
+                <Button type="button" variant="secondary" onClick={copyRevealLink}>
+                  <Copy size={16} />
+                  Copy Link
+                </Button>
+              </div>
+            </div>
+
+            <div class="modal-actions">
+              <Button type="button" variant="secondary" onClick={() => setShareModalOpen(false)} disabled={revealLoading()}>
+                Done
+              </Button>
+            </div>
+          </div>
+        </div>
+      </Show>
 
       <Show when={printModalOpen()}>
         <div class="modal-backdrop" role="presentation" onClick={() => !printLoading() && setPrintModalOpen(false)}>
@@ -609,6 +758,22 @@ function printOrderMessage(order: PublicPrintOrder): string {
 
 function titleCase(value: string): string {
   return value.replace(/[_-]+/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+async function copyToClipboard(value: string): Promise<void> {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(value);
+    return;
+  }
+
+  const textarea = document.createElement("textarea");
+  textarea.value = value;
+  textarea.style.position = "fixed";
+  textarea.style.left = "-9999px";
+  document.body.append(textarea);
+  textarea.select();
+  document.execCommand("copy");
+  textarea.remove();
 }
 
 function formatMonthYear(timestamp: number): string {

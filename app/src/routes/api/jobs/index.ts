@@ -86,15 +86,17 @@ export async function POST({ request }: APIEvent): Promise<Response> {
       stack: error instanceof Error ? error.stack : undefined
     });
   });
-  void sendAdminJobCreatedEmail({ jobId: job.id, username, customerEmail: email, ip }).catch((error) => {
-    logError({
-      event: "admin_job_created_email_sent",
-      jobId: job.id,
-      user: email,
-      message: error instanceof Error ? error.message : String(error),
-      stack: error instanceof Error ? error.stack : undefined
+  if (process.env.NODE_ENV === "production") {
+    void sendAdminJobCreatedEmail({ jobId: job.id, username, customerEmail: email, ip }).catch((error) => {
+      logError({
+        event: "admin_job_created_email_sent",
+        jobId: job.id,
+        user: email,
+        message: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : undefined
+      });
     });
-  });
+  }
 
   return json({ job: toPublicJob(job) }, { status: 201 });
 }

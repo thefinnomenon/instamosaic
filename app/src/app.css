@@ -861,6 +861,28 @@ h3 {
   margin: 0;
 }
 
+.share-action-grid {
+  display: grid;
+  gap: 10px;
+}
+
+.share-video-preview {
+  background: #0f1111;
+  border-radius: 8px;
+  display: grid;
+  justify-self: center;
+  max-height: min(52vh, 520px);
+  overflow: hidden;
+  width: min(220px, 100%);
+}
+
+.share-video-preview video {
+  aspect-ratio: 9 / 16;
+  display: block;
+  height: auto;
+  width: 100%;
+}
+
 .checkbox-row {
   display: flex;
   align-items: center;

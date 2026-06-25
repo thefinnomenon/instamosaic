@@ -26,6 +26,7 @@ export type MosaicOptions = {
 
 export type MosaicOutputType =
   | "master"
+  | "revealPreview"
   | "socialPreview"
   | "squarePreview"
   | "print20x30"
@@ -93,6 +94,7 @@ type Placement = {
 
 export const downloadOutputTypes: Record<MosaicOutputType, { filename: string; label: string }> = {
   master: { filename: "master-24x36.jpg", label: "24x36 master" },
+  revealPreview: { filename: "reveal-1080x1920.jpg", label: "Reveal video mosaic" },
   print20x30: { filename: "print-20x30.jpg", label: "20x30 print" },
   print18x24: { filename: "print-18x24.jpg", label: "18x24 print" },
   print12x18: { filename: "print-12x18.jpg", label: "12x18 print" },
@@ -109,11 +111,11 @@ export function mosaicOptionsFromEnv(): MosaicOptions {
     // 80×120 → 90×90px tiles = 0.3" at 300 DPI, good detail for 24×36" print
     columns: 80,
     rows: 120,
-    // Screen base: 1080×1620 at 54×81 → 20×20px tiles, detailed enough for social previews
+    // Screen base: 1080×1920 at 54×96 → 20×20px tiles, detailed enough for social video
     screenWidth: 1080,
-    screenHeight: 1620,
+    screenHeight: 1920,
     screenColumns: 54,
-    screenRows: 81,
+    screenRows: 96,
     tileSize: 128,
     heroBlendOpacity: 0.18,
     watermarkText: "InstaMosaic",
@@ -675,47 +677,54 @@ async function exportOutputs(input: {
 
   // Keep these sequential. Running the large master-derived exports in parallel
   // can exceed memory on small Docker hosts and get the worker OOM-killed.
+  const revealPreview = await exportResized({
+    sourcePath: screenMasterPath, sourceWidth: screenW, sourceHeight: screenH,
+    outputPath: path.join(outputDir, downloadOutputTypes.revealPreview.filename),
+    width: 1080, height: 1920, watermarked: false, cropCenter: { x: 0.5, y: 0.5 }, options
+  });
+  input.onProgress?.(1 / 8);
+
   const socialPreview = await exportResized({
     sourcePath: screenMasterPath, sourceWidth: screenW, sourceHeight: screenH,
     outputPath: path.join(outputDir, downloadOutputTypes.socialPreview.filename),
     width: socialSize.width, height: socialSize.height, watermarked: false, cropCenter: { x: 0.5, y: 0.5 }, options
   });
-  input.onProgress?.(1 / 6);
+  input.onProgress?.(2 / 8);
 
   const squarePreview = await exportResized({
     sourcePath: screenMasterPath, sourceWidth: screenW, sourceHeight: screenH,
     outputPath: path.join(outputDir, downloadOutputTypes.squarePreview.filename),
     width: 1080, height: 1080, watermarked: false, cropCenter: { x: 0.5, y: 0.5 }, options
   });
-  input.onProgress?.(2 / 6);
+  input.onProgress?.(3 / 8);
 
   const print20x30 = await exportResized({
     sourcePath: masterPath, sourceWidth: masterW, sourceHeight: masterH,
     outputPath: path.join(outputDir, downloadOutputTypes.print20x30.filename),
     width: print20x30Size.width, height: print20x30Size.height, density: 300, watermarked: false, cropCenter: { x: 0.5, y: 0.5 }, options
   });
-  input.onProgress?.(3 / 7);
+  input.onProgress?.(4 / 8);
 
   const print18x24 = await exportResized({
     sourcePath: masterPath, sourceWidth: masterW, sourceHeight: masterH,
     outputPath: path.join(outputDir, downloadOutputTypes.print18x24.filename),
     width: print18x24Size.width, height: print18x24Size.height, density: 300, watermarked: false, cropCenter: { x: 0.5, y: 0.5 }, options
   });
-  input.onProgress?.(4 / 7);
+  input.onProgress?.(5 / 8);
 
   const print12x18 = await exportResized({
     sourcePath: masterPath, sourceWidth: masterW, sourceHeight: masterH,
     outputPath: path.join(outputDir, downloadOutputTypes.print12x18.filename),
     width: print12x18Size.width, height: print12x18Size.height, density: 300, watermarked: false, cropCenter: { x: 0.5, y: 0.5 }, options
   });
-  input.onProgress?.(5 / 7);
+  input.onProgress?.(6 / 8);
 
   const phoneWallpaper = await exportResized({
     sourcePath: masterPath, sourceWidth: masterW, sourceHeight: masterH,
     outputPath: path.join(outputDir, downloadOutputTypes.phoneWallpaper.filename),
     width: 1290, height: 2796, watermarked: false, cropCenter: { x: 0.5, y: 0.5 }, options
   });
-  input.onProgress?.(6 / 7);
+  input.onProgress?.(7 / 8);
 
   const desktopWallpaper = await exportResized({
     sourcePath: masterPath, sourceWidth: masterW, sourceHeight: masterH,
@@ -726,6 +735,7 @@ async function exportOutputs(input: {
 
   return {
     master: { type: "master", path: masterPath, width: masterW, height: masterH, watermarked: false },
+    revealPreview,
     socialPreview,
     squarePreview,
     print20x30,

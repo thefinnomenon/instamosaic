@@ -15,9 +15,11 @@ import {
 } from "@instamosaic/db";
 import { sendPreviewEmail, sendProcessingEmail } from "./email.ts";
 import { checkInstagramProfile, downloadInstagramTiles } from "./instagram.ts";
+import { generateRevealVideo, revealVideoFilename } from "./reveal-video.ts";
 export { checkInstagramProfile, downloadInstagramTiles, mockDownloadInstagramTiles } from "./instagram.ts";
 export { sendAdminJobCreatedEmail, sendDigitalPurchaseEmail } from "./email.ts";
 export { appUrl, normalizeEmail, sanitizeInstagramUsername } from "./validation.ts";
+export { buildRevealVideoCommand, generateRevealVideo, revealVideoFilename, type RevealVideoInput, type RevealVideoStats } from "./reveal-video.ts";
 
 export type ProcessJobOptions = {
   allowRetry?: boolean;
@@ -121,6 +123,38 @@ export async function processJob(jobId: string, options: ProcessJobOptions = {})
       }
     });
 
+    updateJob(jobId, { progress: 98, step: "Generating exports" });
+    const revealVideoPath = path.join(current.output_dir, revealVideoFilename);
+    const revealWarnings: string[] = [];
+    try {
+      await generateRevealVideo({
+        originalImage: current.hero_path,
+        mosaicImage: result.outputs.revealPreview.path,
+        outputVideo: revealVideoPath,
+        stats: {
+          username: current.username,
+          instagramPhotoCount: result.tileCount,
+          tileCount: result.cells
+        },
+        logger: {
+          debug: (message, metadata) => logInfo({ event: "reveal_video_debug", jobId, user: current.email, message, metadata }),
+          info: (message, metadata) => logInfo({ event: "reveal_video_generated", jobId, user: current.email, message, metadata })
+        }
+      });
+      trackEvent({ event: "reveal_video_generated", jobId, user: current.email, metadata: { output: revealVideoFilename } });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      revealWarnings.push(`Reveal video was not generated: ${message}`);
+      logWarn({
+        event: "reveal_video_failed",
+        jobId,
+        user: current.email,
+        message,
+        metadata: { output: revealVideoFilename }
+      });
+      trackEvent({ event: "reveal_video_failed", jobId, user: current.email, metadata: { message } });
+    }
+
     updateJob(jobId, {
       status: "completed",
       progress: 100,
@@ -142,7 +176,8 @@ export async function processJob(jobId: string, options: ProcessJobOptions = {})
           masterHeight: result.masterHeight,
           maxTileReuse: result.maxTileReuse,
           processingMs: result.processingMs,
-          warnings: [...download.warnings, ...result.warnings]
+          revealVideo: revealWarnings.length === 0 ? revealVideoFilename : null,
+          warnings: [...download.warnings, ...result.warnings, ...revealWarnings]
         }
       })
     });

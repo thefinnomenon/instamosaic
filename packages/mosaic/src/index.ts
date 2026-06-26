@@ -117,13 +117,13 @@ export function mosaicOptionsFromEnv(): MosaicOptions {
     screenColumns: 54,
     screenRows: 96,
     tileSize: 128,
-    heroBlendOpacity: 0.18,
+    heroBlendOpacity: 0.28,
     watermarkText: "InstaMosaic",
     watermarkOpacity: 0.35,
     jpegQuality: 82,
-    tileReuseFactor: 1.8,
-    minRepeatRadius: 4,
-    tileColorMatch: 0.7
+    tileReuseFactor: 1.2,
+    minRepeatRadius: 8,
+    tileColorMatch: 0.45
   };
 }
 
@@ -426,38 +426,69 @@ function buildPlacements(input: {
   const cells = input.columns * input.rows;
   const maxReuse = Math.max(1, Math.ceil((cells / input.tiles.length) * input.tileReuseFactor));
   const reuse = new Array(input.tiles.length).fill(0) as number[];
-  const grid = new Array(cells).fill(-1) as number[];
+  const grid = new Array<number>(cells).fill(-1);
   const placements: Placement[] = [];
   const radius = Math.max(0, input.minRepeatRadius);
 
-  for (let row = 0; row < input.rows; row += 1) {
+  // Randomize processing order — prevents raster-scan stripe/diagonal patterns.
+  // With shuffled order the spatial exclusion zone is genuinely radial rather
+  // than biased to the upper-left quadrant.
+  const cellOrder = Array.from({ length: cells }, (_, i) => i);
+  for (let i = cellOrder.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(Math.random() * (i + 1));
+    const tmp = cellOrder[i]!;
+    cellOrder[i] = cellOrder[j]!;
+    cellOrder[j] = tmp;
+  }
+
+  // Global recency ring: prevents the same tile from appearing in rapid
+  // succession anywhere in the image, even outside the spatial radius.
+  const recentSize = Math.min(Math.round(radius * radius * 0.5), Math.floor(input.tiles.length / 2));
+  const recentRing: number[] = [];
+
+  const progressEvery = Math.max(1, Math.floor(cells / 100));
+
+  for (let orderIdx = 0; orderIdx < cells; orderIdx += 1) {
+    const cellIndex = cellOrder[orderIdx]!;
+    const row = Math.floor(cellIndex / input.columns);
+    const column = cellIndex % input.columns;
+
+    const left = Math.floor((column * input.width) / input.columns);
+    const right = Math.floor(((column + 1) * input.width) / input.columns);
     const top = Math.floor((row * input.height) / input.rows);
     const bottom = Math.floor(((row + 1) * input.height) / input.rows);
-    for (let column = 0; column < input.columns; column += 1) {
-      const left = Math.floor((column * input.width) / input.columns);
-      const right = Math.floor(((column + 1) * input.width) / input.columns);
-      const quadLabs = cellQuadLabs(input.heroBuffer, input.channels, input.width, left, top, right, bottom);
 
-      const nearby = new Set<number>();
-      for (let dr = -radius; dr <= 0; dr += 1) {
-        const maxDc = dr === 0 ? -1 : radius;
-        for (let dc = -radius; dc <= maxDc; dc += 1) {
-          const r = row + dr;
-          const c = column + dc;
-          if (r >= 0 && c >= 0 && c < input.columns) {
-            const t = grid[r * input.columns + c] ?? -1;
-            if (t >= 0) nearby.add(t);
-          }
+    const quadLabs = cellQuadLabs(input.heroBuffer, input.channels, input.width, left, top, right, bottom);
+
+    // Full-radius spatial exclusion in all 8 directions (not just upper-left),
+    // seeded with the global recency ring.
+    const nearby = new Set<number>(recentRing);
+    for (let dr = -radius; dr <= radius; dr += 1) {
+      for (let dc = -radius; dc <= radius; dc += 1) {
+        if (dr === 0 && dc === 0) continue;
+        const r = row + dr;
+        const c = column + dc;
+        if (r >= 0 && r < input.rows && c >= 0 && c < input.columns) {
+          const t = grid[r * input.columns + c];
+          if (t !== undefined && t >= 0) nearby.add(t);
         }
       }
-
-      const tileIndex = findClosestTile(quadLabs, input.tiles, reuse, maxReuse, nearby);
-      reuse[tileIndex] = (reuse[tileIndex] ?? 0) + 1;
-      grid[row * input.columns + column] = tileIndex;
-      const { r: avgR, g: avgG, b: avgB } = averageRegionRgb(input.heroBuffer, input.channels, input.width, left, top, right, bottom);
-      placements.push({ tileIndex, left, top, width: right - left, height: bottom - top, avgR, avgG, avgB });
     }
-    input.onProgress?.((row + 1) / input.rows);
+
+    const tileIndex = findClosestTile(quadLabs, input.tiles, reuse, maxReuse, nearby);
+    reuse[tileIndex] = (reuse[tileIndex] ?? 0) + 1;
+    grid[cellIndex] = tileIndex;
+
+    // Advance recency ring
+    recentRing.push(tileIndex);
+    if (recentRing.length > recentSize) recentRing.shift();
+
+    const { r: avgR, g: avgG, b: avgB } = averageRegionRgb(input.heroBuffer, input.channels, input.width, left, top, right, bottom);
+    placements.push({ tileIndex, left, top, width: right - left, height: bottom - top, avgR, avgG, avgB });
+
+    if (orderIdx % progressEvery === 0 || orderIdx === cells - 1) {
+      input.onProgress?.((orderIdx + 1) / cells);
+    }
   }
 
   return placements;
@@ -540,25 +571,42 @@ function findClosestTile(
   maxReuse: number,
   nearby: Set<number>
 ): number {
-  // Four fallback tiers: not-nearby+under-limit → not-nearby → under-limit → any
-  let bestIdx = [-1, -1, -1, 0] as [number, number, number, number];
-  let bestDist = [Infinity, Infinity, Infinity, Infinity] as [number, number, number, number];
+  // Unified scoring replaces the old 4-tier binary fallback.
+  // Both penalties are continuous so tile selection grades smoothly rather than
+  // snapping between tiers, which was causing visible clustering.
+  //
+  // Reuse penalty: quadratic growth — a tile used N times costs (1 + 0.12N)²
+  // more than a fresh tile, strongly discouraging hot tiles.
+  //   N=0  → 1×    N=5  → 2.6×    N=10 → 4.8×    N=20 → 11.6×
+  //
+  // Spatial penalty: tiles seen within the radius or recency window cost 8×
+  // more, so only a dramatically better color match can override.
+  //
+  // Adding 1 to dist before multiplying prevents a perfect-match (dist=0)
+  // from nullifying the spatial penalty.
+
+  let bestIdx = 0;
+  let bestScore = Infinity;
+  let fallbackIdx = 0;
+  let fallbackDist = Infinity;
 
   for (const tile of tiles) {
-    const d = quadDistanceSquared(target, tile);
-    const underLimit = (reuse[tile.index] ?? 0) < maxReuse;
-    const isNearby = nearby.has(tile.index);
+    const reuseCount = reuse[tile.index] ?? 0;
+    const dist = quadDistanceSquared(target, tile);
 
-    if (!isNearby && underLimit && d < bestDist[0]) { bestDist[0] = d; bestIdx[0] = tile.index; }
-    if (!isNearby && d < bestDist[1])               { bestDist[1] = d; bestIdx[1] = tile.index; }
-    if (underLimit && d < bestDist[2])               { bestDist[2] = d; bestIdx[2] = tile.index; }
-    if (d < bestDist[3])                             { bestDist[3] = d; bestIdx[3] = tile.index; }
+    // Unconstrained fallback: used only when every tile has hit maxReuse
+    if (dist < fallbackDist) { fallbackDist = dist; fallbackIdx = tile.index; }
+
+    if (reuseCount >= maxReuse) continue;
+
+    const reusePenalty = (1 + reuseCount * 0.12) ** 2;
+    const nearbyPenalty = nearby.has(tile.index) ? 8 : 1;
+    const score = (dist + 1) * reusePenalty * nearbyPenalty;
+
+    if (score < bestScore) { bestScore = score; bestIdx = tile.index; }
   }
 
-  return bestIdx[0] >= 0 ? bestIdx[0]
-       : bestIdx[1] >= 0 ? bestIdx[1]
-       : bestIdx[2] >= 0 ? bestIdx[2]
-       : bestIdx[3];
+  return bestScore < Infinity ? bestIdx : fallbackIdx;
 }
 
 async function writeTileLayer(input: {
@@ -595,6 +643,7 @@ async function writeTileLayer(input: {
           .rotate()
           .resize(width, height, { fit: "cover", position: "attention" })
           .removeAlpha()
+          .modulate({ saturation: 0.82 })
           .raw()
           .toBuffer({ resolveWithObject: true });
         rawTileCache.set(key, data);

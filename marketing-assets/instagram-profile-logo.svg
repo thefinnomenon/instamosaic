@@ -1,0 +1,22 @@
+<svg width="1080" height="1080" viewBox="0 0 1080 1080" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="background" x1="174" y1="134" x2="914" y2="942" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#163C5A"/>
+      <stop offset="1" stop-color="#E15B43"/>
+    </linearGradient>
+    <pattern id="tile-grid" width="180" height="180" patternUnits="userSpaceOnUse">
+      <path d="M180 0H0V180" stroke="#FFFFFF" stroke-opacity="0.78" stroke-width="28"/>
+    </pattern>
+    <filter id="shadow" x="52" y="52" width="976" height="976" filterUnits="userSpaceOnUse">
+      <feDropShadow dx="0" dy="24" stdDeviation="28" flood-color="#07141E" flood-opacity="0.26"/>
+    </filter>
+  </defs>
+
+  <rect width="1080" height="1080" fill="#F6F1E9"/>
+
+  <g filter="url(#shadow)">
+    <rect x="124" y="124" width="832" height="832" rx="208" fill="url(#background)"/>
+    <rect x="124" y="124" width="832" height="832" rx="208" fill="url(#tile-grid)"/>
+    <rect x="130" y="130" width="820" height="820" rx="202" stroke="#07141E" stroke-opacity="0.16" stroke-width="12"/>
+  </g>
+</svg>

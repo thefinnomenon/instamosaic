@@ -7,6 +7,8 @@ app/.next-*
 .output
 dist
 /storage
+tmp/instagram-campaign-state.json
+tmp/instagram-campaign-state.json.lock
 tmp
 .wrangler/
 .env

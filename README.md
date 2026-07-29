@@ -56,6 +56,45 @@ npm run test:pipeline -- username hero.jpg
 npm run test:reveal
 ```
 
+## Automated Instagram Campaign
+
+`marketing-targets.txt` contains one Instagram username per line. Each run
+advances to the next target, generates its mosaic and reveal video locally,
+publishes a two-item carousel (reveal first, mosaic second) with an
+`@username` caption mention, and publishes the reveal separately to Stories.
+The reveal video visibly includes the target handle.
+
+Check the next target without generating or publishing:
+
+```bash
+npm run campaign:check
+```
+
+Generate and inspect the complete local media package without publishing:
+
+```bash
+npm run campaign:generate
+```
+
+Publish the next campaign item:
+
+```bash
+npm run campaign:run
+```
+
+The campaign needs `INSTAGRAM_RAPIDAPI_KEY`, `INSTAGRAM_USER_ID`, and
+`INSTAGRAM_ACCESS_TOKEN`. It does not use Postgres or R2. A temporary local
+media server and HTTPS tunnel let Instagram fetch the reveal MP4 and mosaic
+JPEG; both close immediately after Instagram finishes processing the carousel
+and Story. Local artifacts and campaign state are kept under
+`tmp/instagram-campaign`.
+
+To run at 9 AM, 2 PM, and 7 PM each day, add this cron entry with `crontab -e`:
+
+```cron
+0 9,14,19 * * * cd /path/to/instamosaic && PATH=/path/to/node/bin:/usr/bin:/bin npm run campaign:run >> tmp/instagram-campaign.log 2>&1
+```
+
 ## Deployment
 
 Use the app on Vercel and deploy the worker Docker image to private Cloud Run. Cloud Tasks should send only `{ "jobId": "..." }` to `POST /internal/jobs/process` with an OIDC token for the Cloud Run service.

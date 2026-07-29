@@ -1,7 +1,7 @@
 import Stripe from "stripe";
-import type { APIEvent } from "@solidjs/start/server";
+type APIEvent = { request: Request; params: Record<string, string | undefined> };
 import { getJob, logError, trackEvent, updateJob } from "@instamosaic/db";
-import { appUrl } from "@instamosaic/worker";
+import { appUrl } from "@instamosaic/worker/app";
 import { env } from "../../../lib/env.ts";
 import { printPriceCents } from "../../../lib/print-pricing.ts";
 import { errorJson, getClientIp, json } from "../../../lib/server.ts";
@@ -14,7 +14,7 @@ const FRAME_COLORS = new Set(["Black", "White", "Oak"]);
 
 export async function POST({ request }: APIEvent): Promise<Response> {
   const body = (await request.json().catch(() => ({}))) as { jobId?: string; size?: string; framed?: boolean; frameColor?: string };
-  const job = body.jobId ? getJob(body.jobId) : null;
+  const job = body.jobId ? await getJob(body.jobId) : null;
   if (!job) return errorJson("Job not found.", 404);
   if (job.status !== "completed") return errorJson("Mosaic is not ready yet.", 409);
   const printSize = PRINT_SIZES.has(String(body.size || "")) ? String(body.size) : "20x30";
@@ -22,7 +22,7 @@ export async function POST({ request }: APIEvent): Promise<Response> {
   const frameColor = FRAME_COLORS.has(String(body.frameColor || "")) ? String(body.frameColor) : "Black";
   const priceCents = printPriceCents(printSize, printType === "Frame");
 
-  trackEvent({ event: "checkout_clicked", jobId: job.id, user: job.email, ip: getClientIp(request), metadata: { product: "physical_print", printSize, printType, frameColor: printType === "Frame" ? frameColor : null, priceCents } });
+  await trackEvent({ event: "checkout_clicked", jobId: job.id, user: job.email, ip: getClientIp(request), metadata: { product: "physical_print", printSize, printType, frameColor: printType === "Frame" ? frameColor : null, priceCents } });
 
   const secret = stripeSecretKey();
   if (!secret) return errorJson("Stripe is not configured.", 503);
@@ -69,11 +69,11 @@ export async function POST({ request }: APIEvent): Promise<Response> {
       cancel_url: `${appUrl()}/status/${job.id}?print=cancelled`
     });
 
-    updateJob(job.id, { stripe_session_id: session.id });
-    trackEvent({ event: "stripe_checkout_created", jobId: job.id, user: job.email, metadata: { sessionId: session.id, product: "physical_print", printSize, printType, frameColor: printType === "Frame" ? frameColor : null } });
+    await updateJob(job.id, { stripe_session_id: session.id });
+    await trackEvent({ event: "stripe_checkout_created", jobId: job.id, user: job.email, metadata: { sessionId: session.id, product: "physical_print", printSize, printType, frameColor: printType === "Frame" ? frameColor : null } });
     return json({ url: session.url });
   } catch (error) {
-    logError({
+    await logError({
       event: "stripe_checkout_failed",
       jobId: job.id,
       user: job.email,
@@ -81,7 +81,7 @@ export async function POST({ request }: APIEvent): Promise<Response> {
       stack: error instanceof Error ? error.stack : undefined,
       metadata: { product: "physical_print" }
     });
-    trackEvent({ event: "stripe_checkout_failed", jobId: job.id, user: job.email, metadata: { product: "physical_print" } });
+    await trackEvent({ event: "stripe_checkout_failed", jobId: job.id, user: job.email, metadata: { product: "physical_print" } });
     return errorJson("Unable to create Stripe checkout.", 500);
   }
 }

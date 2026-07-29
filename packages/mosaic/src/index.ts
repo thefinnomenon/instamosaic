@@ -1,6 +1,8 @@
 import { mkdir, readdir, rm } from "node:fs/promises";
 import path from "node:path";
 import sharp from "sharp";
+import { downloadOutputTypes, type MosaicOutputType } from "./outputs.ts";
+export { downloadOutputTypes, type MosaicOutputType } from "./outputs.ts";
 
 sharp.cache(false);
 sharp.concurrency(1);
@@ -23,17 +25,6 @@ export type MosaicOptions = {
   minRepeatRadius: number;
   tileColorMatch: number;
 };
-
-export type MosaicOutputType =
-  | "master"
-  | "revealPreview"
-  | "socialPreview"
-  | "squarePreview"
-  | "print20x30"
-  | "print18x24"
-  | "print12x18"
-  | "phoneWallpaper"
-  | "desktopWallpaper";
 
 export type MosaicOutput = {
   type: MosaicOutputType;
@@ -90,18 +81,6 @@ type Placement = {
   avgR: number;
   avgG: number;
   avgB: number;
-};
-
-export const downloadOutputTypes: Record<MosaicOutputType, { filename: string; label: string }> = {
-  master: { filename: "master-24x36.jpg", label: "24x36 master" },
-  revealPreview: { filename: "reveal-1080x1920.jpg", label: "Reveal video mosaic" },
-  print20x30: { filename: "print-20x30.jpg", label: "20x30 print" },
-  print18x24: { filename: "print-18x24.jpg", label: "18x24 print" },
-  print12x18: { filename: "print-12x18.jpg", label: "12x18 print" },
-  phoneWallpaper: { filename: "wallpaper-phone.jpg", label: "Phone wallpaper" },
-  desktopWallpaper: { filename: "wallpaper-desktop.jpg", label: "Desktop wallpaper" },
-  socialPreview: { filename: "preview-social-1080x1350.jpg", label: "Social preview" },
-  squarePreview: { filename: "preview-square-1080x1080.jpg", label: "Square preview" }
 };
 
 export function mosaicOptionsFromEnv(): MosaicOptions {
@@ -197,6 +176,8 @@ export async function generateMosaic(input: GenerateMosaicInput): Promise<Mosaic
   const printHeroOverlay = await sharp(heroInput)
     .extract(printHeroRegion)
     .resize(options.masterWidth, options.masterHeight)
+    // PNG uploads may already contain a fully opaque alpha channel.
+    .removeAlpha()
     .ensureAlpha(clamp(options.heroBlendOpacity, 0, 1))
     .png()
     .toBuffer();
@@ -252,6 +233,7 @@ export async function generateMosaic(input: GenerateMosaicInput): Promise<Mosaic
   const screenHeroOverlay = await sharp(heroInput)
     .extract(screenHeroRegion)
     .resize(options.screenWidth, options.screenHeight)
+    .removeAlpha()
     .ensureAlpha(clamp(options.heroBlendOpacity, 0, 1))
     .png()
     .toBuffer();

@@ -1,39 +1,38 @@
 services:
-  app:
-    build: .
-    env_file:
-      - .env
+  postgres:
+    image: postgres:17
     environment:
-      NODE_ENV: production
-      PORT: 3000
+      POSTGRES_USER: instamosaic
+      POSTGRES_PASSWORD: instamosaic
+      POSTGRES_DB: instamosaic
     ports:
-      - "3000:3000"
+      - "5432:5432"
     volumes:
-      - instamosaic-data:/app/storage
-    command: ["npm", "run", "start"]
-    restart: always
-    init: true
+      - instamosaic-postgres:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/health').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
-      interval: 30s
+      test: ["CMD-SHELL", "pg_isready -U instamosaic -d instamosaic"]
+      interval: 10s
       timeout: 5s
-      retries: 3
-      start_period: 20s
+      retries: 5
 
   worker:
     build: .
     env_file:
       - .env
     environment:
-      NODE_ENV: production
-    volumes:
-      - instamosaic-data:/app/storage
-    command: ["npm", "run", "worker"]
-    restart: always
+      NODE_ENV: development
+      PORT: 8080
+      DATABASE_URL: postgresql://instamosaic:instamosaic@postgres:5432/instamosaic?schema=public
+      DIRECT_URL: postgresql://instamosaic:instamosaic@postgres:5432/instamosaic?schema=public
+      LOCAL_OBJECT_STORAGE_DIR: /tmp/instamosaic-object-storage
+    ports:
+      - "8080:8080"
+    command: ["npm", "run", "worker:http"]
+    restart: unless-stopped
     init: true
     depends_on:
-      app:
+      postgres:
         condition: service_healthy
 
 volumes:
-  instamosaic-data:
+  instamosaic-postgres:

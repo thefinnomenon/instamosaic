@@ -1,0 +1,266 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../packages/db/src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum GenerationJobStatus {
+  QUEUED
+  PROCESSING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+enum DispatchStatus {
+  PENDING
+  SENT
+  FAILED
+}
+
+enum EmailDeliveryStatus {
+  PENDING
+  SENT
+  FAILED
+}
+
+model GenerationJob {
+  id                    String              @id @default(uuid())
+  username              String
+  email                 String
+  status                GenerationJobStatus @default(QUEUED)
+  progress              Int                 @default(5)
+  stage                 String              @default("QUEUED")
+  igPublic              Boolean?
+  igPostCount           Int?
+  downloadedCount       Int                 @default(0)
+  skippedCount          Int                 @default(0)
+  photosUsed            Int                 @default(0)
+  attemptCount          Int                 @default(0)
+  maxAttempts           Int                 @default(2)
+  input                 Json                @default("{}")
+  metadata              Json                @default("{}")
+  errorCode             String?
+  errorMessage          String?
+  processingStartedAt   DateTime?
+  heartbeatAt           DateTime?
+  completedAt           DateTime?
+  failedAt              DateTime?
+  completionEmailSentAt DateTime?
+  failureEmailSentAt    DateTime?
+  paidAt                DateTime?
+  amountPaidCents       Int?
+  currency              String?
+  stripeSessionId       String?             @unique
+  downloadToken         String              @unique
+  ipAddress             String?
+  workerExecutionId     String?
+  createdAt             DateTime            @default(now())
+  updatedAt             DateTime            @updatedAt
+
+  assets          GeneratedAsset[]
+  analyticsEvents AnalyticsEvent[]
+  logs            LogEntry[]
+  downloads       Download[]
+  printOrders     PrintOrder[]
+  marketingPosts  MarketingPost[]
+  dispatches      JobDispatch[]
+  emailDeliveries EmailDelivery[]
+
+  @@index([status, createdAt])
+  @@index([email, status])
+  @@index([ipAddress, status])
+}
+
+model GeneratedAsset {
+  id          String        @id @default(uuid())
+  jobId       String
+  type        String
+  bucket      String
+  objectKey   String
+  contentType String
+  size        Int?
+  width       Int?
+  height      Int?
+  checksum    String?
+  etag        String?
+  createdAt   DateTime      @default(now())
+
+  job GenerationJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@unique([jobId, type])
+  @@index([jobId, createdAt])
+}
+
+model JobDispatch {
+  id           String         @id @default(uuid())
+  jobId        String
+  status       DispatchStatus @default(PENDING)
+  taskName     String?
+  errorMessage String?
+  sentAt       DateTime?
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+
+  job GenerationJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@index([status, createdAt])
+  @@index([jobId])
+}
+
+model EmailDelivery {
+  id                String              @id @default(uuid())
+  jobId             String
+  kind              String
+  status            EmailDeliveryStatus @default(PENDING)
+  recipient         String
+  providerMessageId String?
+  errorMessage      String?
+  sentAt            DateTime?
+  createdAt         DateTime            @default(now())
+  updatedAt         DateTime            @updatedAt
+
+  job GenerationJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@unique([jobId, kind])
+  @@index([status, createdAt])
+}
+
+model AnalyticsEvent {
+  id        Int      @id @default(autoincrement())
+  jobId     String?
+  event     String
+  user      String?
+  ip        String?
+  metadata  Json     @default("{}")
+  createdAt DateTime @default(now())
+
+  job GenerationJob? @relation(fields: [jobId], references: [id], onDelete: SetNull)
+
+  @@index([event, createdAt])
+  @@index([jobId, createdAt])
+}
+
+model LogEntry {
+  id        Int      @id @default(autoincrement())
+  jobId     String?
+  level     String   @default("info")
+  event     String
+  user      String?
+  message   String
+  stack     String?
+  metadata  Json     @default("{}")
+  createdAt DateTime @default(now())
+
+  job GenerationJob? @relation(fields: [jobId], references: [id], onDelete: SetNull)
+
+  @@index([level, createdAt])
+  @@index([jobId, createdAt])
+}
+
+model Download {
+  id          Int       @id @default(autoincrement())
+  jobId       String
+  token       String
+  outputType  String
+  ip          String?
+  startedAt   DateTime  @default(now())
+  completedAt DateTime?
+
+  job GenerationJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@index([jobId, startedAt])
+}
+
+model RateLimit {
+  scope         String
+  identity      String
+  windowStartMs BigInt
+  count         Int
+
+  @@id([scope, identity])
+}
+
+model PrintOrder {
+  id                  Int      @id @default(autoincrement())
+  jobId               String
+  stripeSessionId     String   @unique
+  externalOrderNumber String   @unique
+  status              String
+  printshrimpOrderId  String?
+  tracking            String?
+  trackingCourier     String?
+  completed           Boolean?
+  requestPayload      Json?
+  responsePayload     Json?
+  errorMessage        String?
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  job GenerationJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@index([jobId, createdAt])
+}
+
+model MarketingTarget {
+  id                Int      @id @default(autoincrement())
+  instagramUsername String   @unique
+  displayName       String?
+  category          String   @default("creator")
+  priority          Int      @default(0)
+  status            String   @default("active")
+  notes             String?
+  rightsStatus      String   @default("unknown")
+  rightsNotes       String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  posts MarketingPost[]
+
+  @@index([status, priority, updatedAt])
+}
+
+model MarketingPost {
+  id              Int       @id @default(autoincrement())
+  targetId        Int?
+  jobId           String?
+  kind            String    @default("reel")
+  status          String    @default("draft")
+  caption         String
+  bestAssetType   String?
+  bestAssetPath   String?
+  revealVideoPath String?
+  plannedFor      DateTime?
+  approvedAt      DateTime?
+  publishedAt     DateTime?
+  permalink       String?
+  publishNotes    String?
+  errorMessage    String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  target MarketingTarget? @relation(fields: [targetId], references: [id], onDelete: SetNull)
+  job    GenerationJob?  @relation(fields: [jobId], references: [id], onDelete: SetNull)
+
+  @@index([status, plannedFor, createdAt])
+  @@index([jobId])
+  @@index([targetId, createdAt])
+}
+
+model InstagramMention {
+  id               Int       @id @default(autoincrement())
+  sourceUrl        String    @unique
+  username         String?
+  text             String?
+  status           String    @default("new")
+  permissionStatus String    @default("unknown")
+  notes            String?
+  reviewedAt       DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  @@index([status, createdAt])
+}

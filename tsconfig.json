@@ -13,14 +13,24 @@
     "allowSyntheticDefaultImports": true,
     "esModuleInterop": true,
     "resolveJsonModule": true,
-    "jsx": "preserve",
-    "jsxImportSource": "solid-js",
+    "jsx": "react-jsx",
     "baseUrl": ".",
     "paths": {
       "@instamosaic/db": ["packages/db/src/index.ts"],
       "@instamosaic/mosaic": ["packages/mosaic/src/index.ts"],
-      "@instamosaic/worker": ["packages/worker/src/index.ts"]
+      "@instamosaic/mosaic/outputs": ["packages/mosaic/src/outputs.ts"],
+      "@instamosaic/storage": ["packages/storage/src/index.ts"],
+      "@instamosaic/worker": ["packages/worker/src/index.ts"],
+      "@instamosaic/worker/app": ["packages/worker/src/app.ts"],
+      "@instamosaic/worker/profile": ["packages/worker/src/instagram-profile.ts"],
+      "@instamosaic/worker/marketing": ["packages/worker/src/marketing.ts"],
+      "@app/*": ["app/src/*"]
     }
   },
-  "include": ["app/src", "packages/**/*.ts", "scripts/**/*.ts"]
+  "include": [
+    "app/src/lib/**/*",
+    "app/src/routes/api/**/*",
+    "packages/**/*.ts",
+    "scripts/**/*.ts"
+  ]
 }

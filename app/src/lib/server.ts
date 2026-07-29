@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { storageDir } from "@instamosaic/db";
+import { jobInputKey, uploadBuffer } from "@instamosaic/storage";
 import sharp from "sharp";
 
 const MAX_UPLOAD_BYTES = 15 * 1024 * 1024;
@@ -43,7 +44,7 @@ export function shouldBypassRateLimit(): boolean {
   return process.env.NODE_ENV !== "production";
 }
 
-export async function saveHeroImage(file: File, jobId: string): Promise<{ heroPath: string; outputDir: string; bytes: number; mime: string; width: number | null; height: number | null }> {
+export async function saveHeroImage(file: File, jobId: string): Promise<{ heroPath: string; heroObjectKey: string; outputDir: string; bytes: number; mime: string; width: number | null; height: number | null }> {
   if (!file || file.size <= 0) {
     throw new Error("Upload a hero image.");
   }
@@ -65,19 +66,32 @@ export async function saveHeroImage(file: File, jobId: string): Promise<{ heroPa
   await mkdir(outputDir, { recursive: true });
   const heroPath = path.join(outputDir, `hero-${randomUUID()}.${extension}`);
   await writeFile(heroPath, bytes);
+  const heroObjectKey = jobInputKey(jobId, `hero.${extension}`);
+  await uploadBuffer({
+    key: heroObjectKey,
+    body: bytes,
+    contentType: mime,
+    metadata: { jobId, role: "hero" }
+  });
   const metadata = await sharp(heroPath).rotate().toBuffer({ resolveWithObject: true });
-  return { heroPath, outputDir, bytes: bytes.length, mime, width: metadata.info.width ?? null, height: metadata.info.height ?? null };
+  return { heroPath, heroObjectKey, outputDir, bytes: bytes.length, mime, width: metadata.info.width ?? null, height: metadata.info.height ?? null };
 }
 
 export async function imageResponse(filePath: string, filename?: string): Promise<Response> {
   const body = await readFile(filePath);
-  return new Response(body, {
+  return new Response(responseBody(body), {
     headers: {
       "Content-Type": contentTypeForImage(filePath),
       "Cache-Control": "private, max-age=60",
       ...(filename ? { "Content-Disposition": `attachment; filename="${filename.replaceAll('"', "")}"` } : {})
     }
   });
+}
+
+export function responseBody(buffer: Buffer | Uint8Array): ArrayBuffer {
+  const body = new ArrayBuffer(buffer.byteLength);
+  new Uint8Array(body).set(buffer);
+  return body;
 }
 
 function contentTypeForImage(filePath: string): string {

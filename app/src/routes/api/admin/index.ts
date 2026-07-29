@@ -1,4 +1,4 @@
-import type { APIEvent } from "@solidjs/start/server";
+type APIEvent = { request: Request; params: Record<string, string | undefined> };
 import { getDashboardMetrics, trackEvent } from "@instamosaic/db";
 import { errorJson, getClientIp, json } from "../../../lib/server.ts";
 
@@ -14,6 +14,6 @@ export async function GET({ request }: APIEvent): Promise<Response> {
     return errorJson("Unauthorized.", 401);
   }
 
-  trackEvent({ event: "admin_dashboard_viewed", ip: getClientIp(request) });
-  return json({ metrics: getDashboardMetrics() });
+  await trackEvent({ event: "admin_dashboard_viewed", ip: getClientIp(request) });
+  return json({ metrics: await getDashboardMetrics() });
 }

@@ -1,6 +1,7 @@
-import type { APIEvent } from "@solidjs/start/server";
+type APIEvent = { request: Request; params: Record<string, string | undefined> };
 import { assertRateLimit, logError, trackEvent } from "@instamosaic/db";
-import { checkInstagramProfile, normalizeEmail, sanitizeInstagramUsername } from "@instamosaic/worker";
+import { normalizeEmail, sanitizeInstagramUsername } from "@instamosaic/worker/app";
+import { checkInstagramProfile } from "@instamosaic/worker/profile";
 import { errorJson, getClientIp, json, rateLimitResponse, shouldBypassRateLimit } from "../../../lib/server.ts";
 
 const INSTAGRAM_CHECK_IP_LIMIT = 60;
@@ -9,10 +10,26 @@ const INSTAGRAM_CHECK_EMAIL_LIMIT = 60;
 const INSTAGRAM_CHECK_EMAIL_WINDOW_MS = 24 * 60 * 60_000;
 
 export async function GET({ request }: APIEvent): Promise<Response> {
+  try {
+    return await checkProfile(request);
+  } catch (error) {
+    await Promise.allSettled([
+      logError({
+        event: "instagram_check_error",
+        message: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : undefined
+      }),
+      trackEvent({ event: "instagram_check_error", ip: getClientIp(request) })
+    ]);
+    return errorJson("Unable to verify Instagram right now.", 500);
+  }
+}
+
+async function checkProfile(request: Request): Promise<Response> {
   const url = new URL(request.url);
   const ip = getClientIp(request);
   if (!shouldBypassRateLimit()) {
-    const ipLimit = assertRateLimit({ scope: "instagram_check_ip", identity: ip, limit: INSTAGRAM_CHECK_IP_LIMIT, windowMs: INSTAGRAM_CHECK_IP_WINDOW_MS });
+    const ipLimit = await assertRateLimit({ scope: "instagram_check_ip", identity: ip, limit: INSTAGRAM_CHECK_IP_LIMIT, windowMs: INSTAGRAM_CHECK_IP_WINDOW_MS });
     if (!ipLimit.allowed) return rateLimitResponse(ipLimit.retryAfterSeconds);
   }
 
@@ -28,7 +45,7 @@ export async function GET({ request }: APIEvent): Promise<Response> {
     try {
       const email = normalizeEmail(emailParam);
       if (!shouldBypassRateLimit()) {
-        const emailLimit = assertRateLimit({ scope: "instagram_check_email", identity: email, limit: INSTAGRAM_CHECK_EMAIL_LIMIT, windowMs: INSTAGRAM_CHECK_EMAIL_WINDOW_MS });
+        const emailLimit = await assertRateLimit({ scope: "instagram_check_email", identity: email, limit: INSTAGRAM_CHECK_EMAIL_LIMIT, windowMs: INSTAGRAM_CHECK_EMAIL_WINDOW_MS });
         if (!emailLimit.allowed) return rateLimitResponse(emailLimit.retryAfterSeconds);
       }
     } catch {
@@ -36,12 +53,12 @@ export async function GET({ request }: APIEvent): Promise<Response> {
     }
   }
 
-  trackEvent({ event: "instagram_check_started", ip, metadata: { username } });
+  await trackEvent({ event: "instagram_check_started", ip, metadata: { username } });
 
   try {
     const result = await checkInstagramProfile(username);
     const status = result.exists ? (result.is_public ? "public" : "private") : "not_found";
-    trackEvent({
+    await trackEvent({
       event: status === "public" ? "instagram_check_public" : status === "private" ? "instagram_check_private" : "instagram_check_not_found",
       ip,
       metadata: { username, estimatedPhotoCount: result.estimated_photo_count }
@@ -56,13 +73,15 @@ export async function GET({ request }: APIEvent): Promise<Response> {
       errors: result.errors
     });
   } catch (error) {
-    logError({
-      event: "instagram_check_error",
-      message: error instanceof Error ? error.message : String(error),
-      stack: error instanceof Error ? error.stack : undefined,
-      metadata: { username, ip }
-    });
-    trackEvent({ event: "instagram_check_error", ip, metadata: { username } });
+    await Promise.allSettled([
+      logError({
+        event: "instagram_check_error",
+        message: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : undefined,
+        metadata: { username, ip }
+      }),
+      trackEvent({ event: "instagram_check_error", ip, metadata: { username } })
+    ]);
     return errorJson("Unable to verify Instagram right now.", 500);
   }
 }

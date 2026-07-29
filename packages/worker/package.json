@@ -4,6 +4,9 @@
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./app": "./src/app.ts",
+    "./profile": "./src/instagram-profile.ts",
+    "./marketing": "./src/marketing.ts"
   }
 }

@@ -4,16 +4,19 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vinxi dev --host 0.0.0.0",
-    "build": "vinxi build",
-    "start": "vinxi start --host 0.0.0.0"
+    "dev": "next dev --hostname 0.0.0.0",
+    "build": "npm --prefix .. run prisma:generate && next build",
+    "start": "next start --hostname 0.0.0.0"
   },
   "dependencies": {
-    "@solidjs/router": "^0.15.3",
-    "@solidjs/start": "^1.1.0",
-    "lucide-solid": "^0.468.0",
-    "solid-js": "^1.9.5",
-    "solid-ui": "^0.8.0",
-    "vinxi": "^0.5.3"
+    "@radix-ui/react-label": "^2.1.12",
+    "@radix-ui/react-slot": "^1.2.3",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "lucide-react": "^0.468.0",
+    "next": "^16.2.10",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "tailwind-merge": "^3.6.0"
   }
 }

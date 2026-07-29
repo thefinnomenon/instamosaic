@@ -6,7 +6,8 @@ import sharp from "sharp";
 import { sanitizeInstagramUsername } from "./validation.ts";
 
 const DEFAULT_TILE_SIZE = 128;
-const DOWNLOAD_CONCURRENCY = 16;
+const DEFAULT_MAX_IMAGES = 500;
+const DOWNLOAD_CONCURRENCY = 8;
 const MOCK_PHOTO_COUNT = 80;
 let localEnvLoaded = false;
 
@@ -30,6 +31,20 @@ export type DownloadTilesResult = {
   processing_seconds: number;
 };
 
+export type MarketingHeroSource = "profile" | "top_liked" | "recent";
+
+export type DownloadMarketingHeroResult = {
+  username: string;
+  source: MarketingHeroSource;
+  hero_path: string;
+  source_url: string;
+  like_count: number | null;
+  taken_at: string | null;
+  width: number | null;
+  height: number | null;
+  warnings: string[];
+};
+
 export type DownloadProgressEvent = {
   stage: string;
   progress: number;
@@ -42,6 +57,15 @@ type JsonObject = Record<string, unknown>;
 type MediaItem = {
   url: string;
   takenAt: number | null;
+};
+
+type HeroCandidate = {
+  url: string;
+  source: MarketingHeroSource;
+  likeCount: number | null;
+  takenAt: number | null;
+  width: number | null;
+  height: number | null;
 };
 
 export async function checkInstagramProfile(usernameInput: string): Promise<InstagramCheckResult> {
@@ -80,7 +104,7 @@ export async function downloadInstagramTiles(input: {
 }): Promise<DownloadTilesResult> {
   const started = Date.now();
   const username = sanitizeInstagramUsername(input.username);
-  const maxImages = input.maxImages;
+  const maxImages = input.maxImages ?? DEFAULT_MAX_IMAGES;
   const tileSize = input.tileSize ?? DEFAULT_TILE_SIZE;
   await mkdir(input.outputDir, { recursive: true });
 
@@ -161,6 +185,53 @@ export async function downloadInstagramTiles(input: {
   };
 }
 
+export async function downloadMarketingHeroImage(input: {
+  username: string;
+  outputDir: string;
+  source?: "auto" | MarketingHeroSource;
+}): Promise<DownloadMarketingHeroResult> {
+  const username = sanitizeInstagramUsername(input.username);
+  await mkdir(input.outputDir, { recursive: true });
+  const wantedSource = input.source ?? "auto";
+  const warnings: string[] = [];
+  let candidate: HeroCandidate | null = null;
+
+  if (wantedSource === "auto" || wantedSource === "profile") {
+    try {
+      candidate = await profileHeroCandidate(username);
+      if (!candidate && wantedSource === "profile") {
+        throw new Error("Profile response did not include a usable profile photo URL.");
+      }
+    } catch (error) {
+      if (wantedSource === "profile") throw error;
+      warnings.push(`Profile photo was not usable: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  if (!candidate && (wantedSource === "auto" || wantedSource === "top_liked" || wantedSource === "recent")) {
+    const postSource = wantedSource === "recent" ? "recent" : "top_liked";
+    candidate = await postHeroCandidate(username, postSource);
+  }
+
+  if (!candidate) {
+    throw new Error("No usable hero image was found for this Instagram profile.");
+  }
+
+  const heroPath = path.join(input.outputDir, `hero-${candidate.source}.jpg`);
+  const metadata = await downloadHero(candidate.url, heroPath);
+  return {
+    username,
+    source: candidate.source,
+    hero_path: heroPath,
+    source_url: candidate.url,
+    like_count: candidate.likeCount,
+    taken_at: candidate.takenAt ? isoFromUnix(candidate.takenAt) : null,
+    width: metadata.width,
+    height: metadata.height,
+    warnings
+  };
+}
+
 function rapidApiKey(): string {
   loadLocalEnv();
   const key = process.env.INSTAGRAM_RAPIDAPI_KEY || process.env.RAPIDAPI_KEY;
@@ -209,7 +280,7 @@ function loadLocalEnv(): void {
   if (localEnvLoaded) return;
   localEnvLoaded = true;
 
-  for (const envPath of [path.resolve(process.cwd(), ".env"), path.resolve(process.cwd(), "../.env")]) {
+  for (const envPath of [".env", "../.env"]) {
     if (existsSync(envPath)) loadDotenv({ path: envPath });
   }
 }
@@ -249,6 +320,107 @@ function mediaItemsFromPostsPayload(payload: JsonObject): MediaItem[] {
   return items;
 }
 
+async function profileHeroCandidate(username: string): Promise<HeroCandidate | null> {
+  const payload = await rapidApiPost("profile", { username });
+  const result = objectValue(payload.result);
+  if (!result) return null;
+  const url = bestProfilePhotoUrl(result);
+  if (!url) return null;
+  return {
+    url,
+    source: "profile",
+    likeCount: null,
+    takenAt: null,
+    width: null,
+    height: null
+  };
+}
+
+async function postHeroCandidate(username: string, source: "top_liked" | "recent"): Promise<HeroCandidate | null> {
+  let maxId = "";
+  let pagesChecked = 0;
+  let best: HeroCandidate | null = null;
+
+  while (pagesChecked < 4) {
+    pagesChecked += 1;
+    const payload = await rapidApiPost("posts", { username, maxId });
+    const candidates = heroCandidatesFromPostsPayload(payload, source);
+    for (const candidate of candidates) {
+      if (!best || heroCandidateScore(candidate, source) > heroCandidateScore(best, source)) {
+        best = candidate;
+      }
+    }
+    const nextCursor = nextCursorFromPostsPayload(payload);
+    if (!nextCursor || nextCursor === maxId) break;
+    maxId = nextCursor;
+  }
+
+  return best;
+}
+
+function bestProfilePhotoUrl(profile: JsonObject): string | null {
+  const directFields = [
+    "profile_pic_url_hd",
+    "profile_pic_url",
+    "hd_profile_pic_url",
+    "profile_pic_url_high_resolution"
+  ];
+  for (const field of directFields) {
+    const value = profile[field];
+    if (typeof value === "string" && value.startsWith("http")) return value;
+  }
+
+  const nestedObjects = [
+    objectValue(profile.hd_profile_pic_url_info),
+    objectValue(profile.profile_pic_url_info),
+    objectValue(profile.profile_pic_hd)
+  ].filter((value): value is JsonObject => Boolean(value));
+  for (const entry of nestedObjects) {
+    if (typeof entry.url === "string" && entry.url.startsWith("http")) return entry.url;
+  }
+
+  const versions = [
+    ...arrayValue(profile.hd_profile_pic_versions),
+    ...arrayValue(profile.profile_pic_versions)
+  ].map((value) => objectValue(value)).filter((value): value is JsonObject => Boolean(value));
+  versions.sort((a, b) => areaValue(b) - areaValue(a));
+  const best = versions.find((value) => typeof value.url === "string");
+  return typeof best?.url === "string" ? best.url : null;
+}
+
+function heroCandidatesFromPostsPayload(payload: JsonObject, source: "top_liked" | "recent"): HeroCandidate[] {
+  const result = objectValue(payload.result);
+  const edges = arrayValue(result?.edges);
+  const items: HeroCandidate[] = [];
+  const seen = new Set<string>();
+
+  for (const edge of edges) {
+    const node = objectValue(objectValue(edge)?.node);
+    if (!node || isVideoMedia(node)) continue;
+    const nodeTakenAt = takenAtFromMedia(node);
+    const nodeLikeCount = likeCountFromMedia(node);
+    const carousel = arrayValue(node.carousel_media);
+    const media = carousel.length ? carousel : [node];
+
+    for (const entry of media) {
+      const mediaNode = objectValue(entry);
+      if (!mediaNode || isVideoMedia(mediaNode)) continue;
+      const candidate = bestLargeMediaCandidate(mediaNode);
+      if (!candidate?.url || seen.has(candidate.url)) continue;
+      seen.add(candidate.url);
+      items.push({
+        url: candidate.url,
+        source,
+        likeCount: likeCountFromMedia(mediaNode, nodeLikeCount),
+        takenAt: takenAtFromMedia(mediaNode, nodeTakenAt),
+        width: candidate.width,
+        height: candidate.height
+      });
+    }
+  }
+  return items;
+}
+
 function nextCursorFromPostsPayload(payload: JsonObject): string | null {
   const pageInfo = objectValue(objectValue(payload.result)?.page_info);
   if (!pageInfo?.has_next_page) return null;
@@ -262,6 +434,21 @@ function bestMediaUrl(item: JsonObject): string | null {
   if (!candidates.length) return null;
   candidates.sort((a, b) => candidateScore(a) - candidateScore(b));
   return String(candidates[0]!.url);
+}
+
+function bestLargeMediaCandidate(item: JsonObject): { url: string; width: number | null; height: number | null } | null {
+  const candidates = arrayValue(objectValue(item.image_versions2)?.candidates)
+    .map((candidate) => objectValue(candidate))
+    .filter((candidate): candidate is JsonObject => candidate !== null && typeof candidate.url === "string");
+  if (!candidates.length && typeof item.display_url === "string") {
+    return { url: item.display_url, width: null, height: null };
+  }
+  if (!candidates.length && typeof item.thumbnail_src === "string") {
+    return { url: item.thumbnail_src, width: null, height: null };
+  }
+  candidates.sort((a, b) => areaValue(b) - areaValue(a));
+  const best = candidates[0];
+  return best ? { url: String(best.url), width: numberOrNull(best.width), height: numberOrNull(best.height) } : null;
 }
 
 function candidateScore(candidate: JsonObject): number {
@@ -279,6 +466,16 @@ function isVideoMedia(item: JsonObject): boolean {
   return Boolean(item.video_dash_manifest);
 }
 
+function likeCountFromMedia(item: JsonObject, fallback: number | null = null): number | null {
+  const direct = numberOrNull(item.like_count ?? item.likes_count);
+  if (direct !== null) return direct;
+  const edgeLiked = numberOrNull(objectValue(item.edge_liked_by)?.count);
+  if (edgeLiked !== null) return edgeLiked;
+  const previewLike = numberOrNull(objectValue(item.edge_media_preview_like)?.count);
+  if (previewLike !== null) return previewLike;
+  return fallback;
+}
+
 function takenAtFromMedia(item: JsonObject, fallback: number | null = null): number | null {
   const raw = item.taken_at ?? item.taken_at_timestamp ?? item.device_timestamp ?? fallback;
   const value = numberValue(raw);
@@ -287,19 +484,45 @@ function takenAtFromMedia(item: JsonObject, fallback: number | null = null): num
 }
 
 async function downloadTile(url: string, destination: string, tileSize: number): Promise<void> {
-  const response = await fetchWithTimeout(url, {
-    headers: {
-      "User-Agent": "Mozilla/5.0 (compatible; InstaMosaic/0.1; +https://instamosaic.local)",
-      "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8"
-    }
-  }, 30_000);
-  if (!response.ok) throw new Error(`Image request failed with HTTP ${response.status}`);
-  const bytes = Buffer.from(await response.arrayBuffer());
+  const bytes = await downloadImageBytes(url, "Image", 30_000);
   await sharp(bytes)
     .rotate()
     .resize(tileSize, tileSize, { fit: "cover", position: "attention" })
     .jpeg({ quality: 88, mozjpeg: true })
     .toFile(destination);
+}
+
+async function downloadHero(url: string, destination: string): Promise<{ width: number | null; height: number | null }> {
+  const bytes = await downloadImageBytes(url, "Hero image", 30_000);
+  const result = await sharp(bytes)
+    .rotate()
+    .jpeg({ quality: 92, mozjpeg: true })
+    .toFile(destination);
+  return { width: result.width ?? null, height: result.height ?? null };
+}
+
+async function downloadImageBytes(url: string, label: string, timeoutMs: number): Promise<Buffer> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, {
+      signal: controller.signal,
+      headers: {
+        "User-Agent": "Mozilla/5.0 (compatible; InstaMosaic/0.1; +https://instamosaic.local)",
+        "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8"
+      }
+    });
+    if (!response.ok) throw new Error(`${label} request failed with HTTP ${response.status}`);
+    return Buffer.from(await response.arrayBuffer());
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function heroCandidateScore(candidate: HeroCandidate, source: "top_liked" | "recent"): number {
+  if (source === "recent") return candidate.takenAt ?? 0;
+  const likes = candidate.likeCount ?? -1;
+  return likes * 1_000_000_000 + (candidate.takenAt ?? 0);
 }
 
 export async function mockDownloadInstagramTiles(input: {
@@ -360,6 +583,17 @@ function arrayValue(value: unknown): unknown[] {
 function numberValue(value: unknown): number {
   const parsed = Number(value || 0);
   return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function numberOrNull(value: unknown): number | null {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function areaValue(value: JsonObject): number {
+  const width = numberValue(value.width);
+  const height = numberValue(value.height);
+  return width * height;
 }
 
 function isoFromUnix(timestamp: number): string {

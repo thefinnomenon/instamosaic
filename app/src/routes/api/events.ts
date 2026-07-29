@@ -1,4 +1,4 @@
-import type { APIEvent } from "@solidjs/start/server";
+type APIEvent = { request: Request; params: Record<string, string | undefined> };
 import { trackEvent } from "@instamosaic/db";
 import { getClientIp, json } from "../../lib/server.ts";
 

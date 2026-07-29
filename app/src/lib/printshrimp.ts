@@ -9,7 +9,7 @@ import {
   updatePrintOrderStatus,
   type Job
 } from "@instamosaic/db";
-import { appUrl } from "@instamosaic/worker";
+import { appUrl } from "@instamosaic/worker/app";
 import { env } from "./env.ts";
 
 const PRINTSHRIMP_BASE_URL = "https://api.printshrimp.com/functions/v1";
@@ -52,10 +52,10 @@ type PrintShrimpOrderStatus = {
 
 export async function submitPrintShrimpOrder(job: Job, session: Stripe.Checkout.Session): Promise<void> {
   const payload = printShrimpPayload(job, session);
-  const existingOrder = getPrintOrderByStripeSession(session.id);
+  const existingOrder = await getPrintOrderByStripeSession(session.id);
   if (existingOrder?.status === "submitted" || existingOrder?.status === "submitting") return;
   if (!existingOrder) {
-    createPrintOrder({
+    await createPrintOrder({
       jobId: job.id,
       stripeSessionId: session.id,
       externalOrderNumber: payload.external_order_number,
@@ -66,9 +66,9 @@ export async function submitPrintShrimpOrder(job: Job, session: Stripe.Checkout.
   const apiKey = env("PRINTSHRIMP_API_KEY");
   if (!apiKey) {
     const message = "Print Shrimp is not configured.";
-    markPrintOrderFailed({ stripeSessionId: session.id, errorMessage: message });
-    logError({ event: "printshrimp_order_failed", jobId: job.id, user: job.email, message });
-    trackEvent({ event: "printshrimp_order_failed", jobId: job.id, user: job.email, metadata: { sessionId: session.id, message } });
+    await markPrintOrderFailed({ stripeSessionId: session.id, errorMessage: message });
+    await logError({ event: "printshrimp_order_failed", jobId: job.id, user: job.email, message });
+    await trackEvent({ event: "printshrimp_order_failed", jobId: job.id, user: job.email, metadata: { sessionId: session.id, message } });
     throw new Error(message);
   }
 
@@ -88,21 +88,21 @@ export async function submitPrintShrimpOrder(job: Job, session: Stripe.Checkout.
       throw new PrintShrimpError(`Print Shrimp failed with ${response.status}: ${text}`, responsePayload);
     }
 
-    markPrintOrderSubmitted({
+    await markPrintOrderSubmitted({
       stripeSessionId: session.id,
       printshrimpOrderId: extractOrderId(responsePayload),
       responsePayload,
       ...printShrimpOrderFields(responsePayload)
     });
-    trackEvent({ event: "printshrimp_order_submitted", jobId: job.id, user: job.email, metadata: { sessionId: session.id } });
+    await trackEvent({ event: "printshrimp_order_submitted", jobId: job.id, user: job.email, metadata: { sessionId: session.id } });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    markPrintOrderFailed({
+    await markPrintOrderFailed({
       stripeSessionId: session.id,
       errorMessage: message,
       responsePayload: error instanceof PrintShrimpError ? error.responsePayload : undefined
     });
-    logError({
+    await logError({
       event: "printshrimp_order_failed",
       jobId: job.id,
       user: job.email,
@@ -110,7 +110,7 @@ export async function submitPrintShrimpOrder(job: Job, session: Stripe.Checkout.
       stack: error instanceof Error ? error.stack : undefined,
       metadata: { sessionId: session.id }
     });
-    trackEvent({ event: "printshrimp_order_failed", jobId: job.id, user: job.email, metadata: { sessionId: session.id, message } });
+    await trackEvent({ event: "printshrimp_order_failed", jobId: job.id, user: job.email, metadata: { sessionId: session.id, message } });
     throw error;
   }
 }
@@ -139,7 +139,7 @@ export async function syncPrintShrimpOrder(input: {
   const responsePayload = parseJson(text) ?? { body: text };
   if (!response.ok) throw new PrintShrimpError(`Print Shrimp status failed with ${response.status}: ${text}`, responsePayload);
 
-  updatePrintOrderStatus({
+  await updatePrintOrderStatus({
     stripeSessionId: input.stripeSessionId,
     printshrimpOrderId: extractOrderId(responsePayload),
     responsePayload,

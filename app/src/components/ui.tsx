@@ -1,28 +1,8 @@
-import type { JSX } from "solid-js";
-
-export function Button(props: JSX.ButtonHTMLAttributes<HTMLButtonElement> & { variant?: "primary" | "secondary" | "ghost" | "danger" }) {
-  const variant = props.variant || "primary";
-  return (
-    <button
-      {...props}
-      class={`button button-${variant}${props.class ? ` ${props.class}` : ""}`}
-    >
-      {props.children}
-    </button>
-  );
-}
-
-export function TextInput(props: JSX.InputHTMLAttributes<HTMLInputElement>) {
-  return <input {...props} class={`field${props.class ? ` ${props.class}` : ""}`} />;
-}
-
-export function Panel(props: { children: JSX.Element; class?: string }) {
-  return <section class={`panel${props.class ? ` ${props.class}` : ""}`}>{props.children}</section>;
-}
-
-export function Badge(props: { children: JSX.Element; tone?: "neutral" | "success" | "warning" | "danger" }) {
-  return <span class={`badge badge-${props.tone || "neutral"}`}>{props.children}</span>;
-}
+export { Badge } from "./ui/badge.tsx";
+export { Button } from "./ui/button.tsx";
+export { Card as Panel } from "./ui/card.tsx";
+export { Input as TextInput } from "./ui/input.tsx";
+export { Label } from "./ui/label.tsx";
 
 export async function trackUiEvent(event: string, metadata: Record<string, unknown> = {}, jobId?: string, user?: string) {
   try {

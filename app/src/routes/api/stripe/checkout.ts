@@ -1,7 +1,7 @@
 import Stripe from "stripe";
-import type { APIEvent } from "@solidjs/start/server";
+type APIEvent = { request: Request; params: Record<string, string | undefined> };
 import { getJob, logError, trackEvent, updateJob } from "@instamosaic/db";
-import { appUrl } from "@instamosaic/worker";
+import { appUrl } from "@instamosaic/worker/app";
 import { errorJson, getClientIp, json } from "../../../lib/server.ts";
 import { stripeSecretKey } from "../../../lib/stripe.ts";
 
@@ -10,12 +10,12 @@ const CURRENCY = "usd";
 
 export async function POST({ request }: APIEvent): Promise<Response> {
   const body = (await request.json().catch(() => ({}))) as { jobId?: string };
-  const job = body.jobId ? getJob(body.jobId) : null;
+  const job = body.jobId ? await getJob(body.jobId) : null;
   if (!job) return errorJson("Job not found.", 404);
   if (job.status !== "completed") return errorJson("Mosaic is not ready yet.", 409);
   if (job.paid_at) return json({ url: `${appUrl()}/status/${job.id}` });
 
-  trackEvent({ event: "checkout_clicked", jobId: job.id, user: job.email, ip: getClientIp(request) });
+  await trackEvent({ event: "checkout_clicked", jobId: job.id, user: job.email, ip: getClientIp(request) });
 
   const secret = stripeSecretKey();
   if (!secret) return errorJson("Stripe is not configured.", 503);
@@ -46,18 +46,18 @@ export async function POST({ request }: APIEvent): Promise<Response> {
       cancel_url: `${appUrl()}/status/${job.id}?checkout=cancelled`
     });
 
-    updateJob(job.id, { stripe_session_id: session.id });
-    trackEvent({ event: "stripe_checkout_created", jobId: job.id, user: job.email, metadata: { sessionId: session.id } });
+    await updateJob(job.id, { stripe_session_id: session.id });
+    await trackEvent({ event: "stripe_checkout_created", jobId: job.id, user: job.email, metadata: { sessionId: session.id } });
     return json({ url: session.url });
   } catch (error) {
-    logError({
+    await logError({
       event: "stripe_checkout_failed",
       jobId: job.id,
       user: job.email,
       message: error instanceof Error ? error.message : String(error),
       stack: error instanceof Error ? error.stack : undefined
     });
-    trackEvent({ event: "stripe_checkout_failed", jobId: job.id, user: job.email });
+    await trackEvent({ event: "stripe_checkout_failed", jobId: job.id, user: job.email });
     return errorJson("Unable to create Stripe checkout.", 500);
   }
 }

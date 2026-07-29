@@ -1,231 +1,72 @@
-# InstaMosaic MVP
+# InstaMosaic
 
-InstaMosaic is a complete vertical-slice MVP for generating a photo mosaic from public Instagram photos.
+InstaMosaic generates print-ready and social-ready mosaics from public Instagram image posts.
 
-Flow:
+The production architecture is now Next.js/Postgres/R2/Cloud Run based:
 
-1. User enters Instagram username, hero image, and email.
-2. App checks the Instagram profile after a 700ms debounce.
-3. Submit creates a queued SQLite job and sends the processing email.
-4. TypeScript downloads public Instagram image posts through RapidAPI and converts them into square tiles.
-5. TypeScript + sharp builds a 24x36 master mosaic and exports previews/print/wallpaper files.
-6. Stripe Checkout unlocks unlimited paid downloads.
+- Next.js App Router web/API application in `app/`
+- Prisma ORM with Prisma-hosted PostgreSQL
+- Cloudflare R2-compatible object storage for uploaded inputs and generated outputs
+- Private Cloud Run worker invoked by Google Cloud Tasks
+- Postgres-backed job progress, dispatch state, generated asset records, analytics, downloads, print orders, and marketing drafts
+- Resend email for processing, completion, failure, purchase, and marketing-review notifications
+- Stripe Checkout and webhook handling for digital downloads and print orders
 
-## Stack
+SQLite has been removed from runtime persistence.
 
-- SolidStart app in `app/`
-- SolidJS UI with local UI primitives and the requested `solid-ui` package installed
-- Node/TypeScript backend routes
-- SQLite via `better-sqlite3`
-- TypeScript RapidAPI Instagram client in `packages/worker`
-- sharp mosaic generator in `packages/mosaic`
-- Resend email API
-- Stripe Checkout + webhook
-- Docker and docker-compose
-
-## Setup
+## Local Setup
 
 ```bash
 cp .env.example .env
 npm install
-npm run db:init
+npm run prisma:generate
+npm run prisma:migrate
 npm run dev
 ```
 
-Open `http://localhost:3000`.
+For local Cloud Tasks replacement, set:
 
-## Required Environment
+```env
+CLOUD_TASKS_DEV_MODE=local
+LOCAL_WORKER_URL=http://127.0.0.1:8080
+WORKER_SHARED_SECRET=dev-worker-secret
+```
 
-Set these for the full production-like flow:
+`npm run dev` starts the app and the HTTP worker. The app creates a job and dispatches the worker through the local worker URL.
 
-- `APP_URL`
-- `ADMIN_PASSWORD`
-- `RESEND_API_KEY`
-- `STRIPE_SECRET_KEY`
-- `STRIPE_WEBHOOK_SECRET`
-- `INSTAGRAM_RAPIDAPI_KEY`
-- `INSTAGRAM_RAPIDAPI_HOST`
+## Core Scripts
 
-Generation, pricing, storage, rate limits, and worker behavior are hardcoded in the app.
+```bash
+npm run dev              # app plus local worker HTTP service
+npm run dev:app          # app only
+npm run worker:http      # Cloud Run-style worker endpoint
+npm run prisma:migrate   # create/apply a local migration
+npm run db:init          # apply migrations in deployed environments
+npm run typecheck
+npm --workspace app run build
+```
 
-## Local Harness
-
-Check profile:
+Existing harnesses are still available:
 
 ```bash
 npm run test:check -- username
-```
-
-Download tiles:
-
-```bash
-npm run test:download -- username
 npm run test:download -- username --mock
-```
-
-Set `INSTAGRAM_RAPIDAPI_KEY` to use the RapidAPI `instagram120` profile and posts endpoints. By default this downloads every image the provider pages through.
-
-```bash
-INSTAGRAM_RAPIDAPI_KEY=... npm run test:download -- public_username
-```
-
-Generate mosaic:
-
-```bash
 npm run test:mosaic -- hero.jpg tmp/test/username/tiles
-```
-
-Full pipeline:
-
-```bash
 npm run test:pipeline -- username hero.jpg
-```
-
-Fast mock verification:
-
-```bash
-npm run test:pipeline -- demo app/public/mosaic-sample.jpg --mock
-```
-
-## Worker
-
-Submitted jobs are queued in SQLite. During local development, `npm run dev` starts both the web app and worker.
-
-Run only the web app:
-
-```bash
-npm run dev:app
-```
-
-Run only the worker:
-
-```bash
-npm run worker
-```
-
-The worker claims one queued job at a time and processes it to completion before taking the next job.
-
-Docker Compose runs both services:
-
-```bash
-docker compose up -d --build
-docker compose logs -f app worker
-```
-
-## Stripe
-
-Create a Stripe webhook endpoint:
-
-```text
-POST https://your-domain.com/api/stripe/webhook
-```
-
-Listen for:
-
-- `checkout.session.completed`
-- `checkout.session.async_payment_failed`
-
-Set `STRIPE_SECRET_KEY` and `STRIPE_WEBHOOK_SECRET` per environment. Use test-mode values in development and live-mode values in production.
-
-## Print fulfillment
-
-Physical print orders use Stripe Checkout to collect payment and shipping details. After `checkout.session.completed`, the webhook submits the completed 24x36 master artwork to Print Shrimp in URL mode.
-
-Configure:
-
-```text
-PRINTSHRIMP_API_KEY=...
-```
-
-The Print Shrimp API base URL is hardcoded to `https://api.printshrimp.com/functions/v1`. The Print Shrimp artwork URL is generated from the job download token and points at `/api/artwork/:token`.
-
-## Admin
-
-Visit `/admin` and enter `ADMIN_PASSWORD`.
-
-The dashboard shows total/completed/failed jobs, average processing time, revenue, downloads, funnel events, recent jobs, analytics, and recent errors.
-
-## Storage
-
-All generated files and SQLite data live under `storage/`:
-
-```text
-storage/
-  instamosaic.sqlite
-  jobs/<job_id>/
-    hero-*.jpg
-    tiles/
-    master-24x36.jpg
-    reveal-1080x1920.jpg
-    preview-social-1080x1350.jpg
-    preview-square-1080x1080.jpg
-    print-20x30.jpg
-    print-18x24.jpg
-    print-12x18.jpg
-    wallpaper-phone.jpg
-    wallpaper-desktop.jpg
-    reveal.mp4
-```
-
-The app never exposes filesystem paths to clients. Downloads use random tokens.
-
-## Reveal video
-
-After the mosaic exports finish, the worker tries to generate a vertical social reveal video:
-
-```text
-jobs/<job_id>/reveal.mp4
-```
-
-The video is 1080x1920, 15 seconds, H264, `yuv420p`, and uses `+faststart` for mobile/social compatibility. It is added to the digital ZIP automatically and can also be downloaded directly with:
-
-```text
-/api/download/<download_token>/reveal
-```
-
-FFmpeg must be installed on the server. If FFmpeg is missing or fails, the worker logs `reveal_video_failed`, stores a warning in job metadata, and still completes the mosaic.
-
-Reusable API:
-
-```ts
-import { generateRevealVideo } from "@instamosaic/worker";
-
-await generateRevealVideo({
-  originalImage: "/path/to/uploaded-hero.jpg",
-  mosaicImage: "/path/to/preview-social-1080x1350.jpg",
-  outputVideo: "/path/to/reveal.mp4",
-  stats: {
-    username: "thefinnomenon",
-    instagramPhotoCount: 2341,
-    tileCount: 9600
-  }
-});
-```
-
-The worker passes the uploaded hero image as `originalImage` and the dedicated `reveal-1080x1920.jpg` export as `mosaicImage`. This avoids sending the huge print master through FFmpeg on small servers while keeping the reveal video a true 9:16 frame with no letterboxing.
-
-Scene construction:
-
-- `0-2s`: original image fills the 9:16 frame, fades in from black, and slowly zooms.
-- `2-3s`: FFmpeg `xfade` crossfades from original to mosaic.
-- `3-10s`: mosaic slowly zooms in with FFmpeg `zoompan`.
-- `10-13s`: mosaic zooms back out to full frame.
-- `13-15s`: a transparent PNG text overlay fades in with the photo count and `instamosaic.com`.
-
-The command is generated by `buildRevealVideoCommand()`, which returns the command, args, and `filter_complex`. Future styles can be added by changing the command builder or adding a new builder while keeping the public `generateRevealVideo()` API stable. Good next extension points are random pan direction, alternate zoom paths, animated text, music, watermark layers, landscape/square exports, and thumbnails.
-
-Local test:
-
-```bash
 npm run test:reveal
-```
-
-By default this reads `scripts/hero.jpeg` and prefers `scripts/reveal-mosaic.jpg` if present, falling back to `scripts/social-mosaic.jpg`, then writes `tmp/test/reveal/reveal.mp4`. You can override all paths:
-
-```bash
-npm run test:reveal -- hero.jpg preview-social-1080x1350.jpg tmp/test/reveal.mp4
 ```
 
 ## Deployment
 
-- DigitalOcean Droplet: [docs/digitalocean.md](docs/digitalocean.md)
+Use the app on Vercel and deploy the worker Docker image to private Cloud Run. Cloud Tasks should send only `{ "jobId": "..." }` to `POST /internal/jobs/process` with an OIDC token for the Cloud Run service.
+
+Vercel project settings:
+
+- Framework preset: Next.js
+- Install command: `npm install`
+- Build command: `npm --workspace app run build`
+- Development command: `npm run dev:app`
+
+Set the Vercel environment variables listed in `.env.example`, except local-only variables such as `CLOUD_TASKS_DEV_MODE`, `LOCAL_WORKER_URL`, and `WORKER_ALLOW_UNAUTHENTICATED`.
+
+See [docs/production-architecture.md](docs/production-architecture.md) for the inspected architecture, data model, deployment variables, and operational notes.

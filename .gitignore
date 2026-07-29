@@ -1,9 +1,17 @@
 node_modules
+.next
+.next-*
+app/.next
+app/.next-*
 .vinxi
 .output
 dist
 storage
 tmp
+.wrangler/
 .env
+.env.prod
 .DS_Store
 *.log
+.vercel
+.env*

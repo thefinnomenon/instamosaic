@@ -1,16 +1,5 @@
-import { existsSync } from "node:fs";
-import path from "node:path";
-import { config } from "dotenv";
-
-let loaded = false;
-
 export function loadServerEnv(): void {
-  if (loaded) return;
-  loaded = true;
-
-  for (const filePath of [path.resolve(process.cwd(), ".env"), path.resolve(process.cwd(), "..", ".env")]) {
-    if (existsSync(filePath)) config({ path: filePath, override: false });
-  }
+  // Next.js and Vercel load app environment variables before route handlers run.
 }
 
 export function env(name: string): string | undefined {

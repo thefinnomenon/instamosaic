@@ -1,15 +1,15 @@
 import Stripe from "stripe";
-import type { APIEvent } from "@solidjs/start/server";
+type APIEvent = { request: Request; params: Record<string, string | undefined> };
 import { getJob, logError, markJobPaid, toPublicJob, trackEvent } from "@instamosaic/db";
-import { sendDigitalPurchaseEmail } from "@instamosaic/worker";
+import { sendDigitalPurchaseEmail } from "@instamosaic/worker/app";
 import { errorJson, json } from "../../../lib/server.ts";
 import { stripeSecretKey } from "../../../lib/stripe.ts";
 
 export async function POST({ request }: APIEvent): Promise<Response> {
   const body = (await request.json().catch(() => ({}))) as { jobId?: string; sessionId?: string };
-  const job = body.jobId ? getJob(body.jobId) : null;
+  const job = body.jobId ? await getJob(body.jobId) : null;
   if (!job) return errorJson("Job not found.", 404);
-  if (job.paid_at) return json({ job: toPublicJob(job, true) });
+  if (job.paid_at) return json({ job: await toPublicJob(job, true) });
 
   const sessionId = body.sessionId || job.stripe_session_id;
   if (!sessionId) return errorJson("Checkout session is missing.", 400);
@@ -23,14 +23,14 @@ export async function POST({ request }: APIEvent): Promise<Response> {
     if (session.metadata?.jobId !== job.id) return errorJson("Checkout session does not match this job.", 403);
     if (session.payment_status !== "paid") return errorJson("Checkout is not paid yet.", 409);
 
-    const paidJob = markJobPaid({
+    const paidJob = await markJobPaid({
       jobId: job.id,
       stripeSessionId: session.id,
       amountPaidCents: session.amount_total ?? null,
       currency: session.currency ?? null
     });
 
-    trackEvent({ event: "stripe_checkout_confirmed", jobId: job.id, user: job.email, metadata: { sessionId: session.id } });
+    await trackEvent({ event: "stripe_checkout_confirmed", jobId: job.id, user: job.email, metadata: { sessionId: session.id } });
     await sendDigitalPurchaseEmail({
       to: paidJob.email,
       jobId: paidJob.id,
@@ -39,9 +39,9 @@ export async function POST({ request }: APIEvent): Promise<Response> {
       currency: session.currency ?? null
     });
 
-    return json({ job: toPublicJob(paidJob, true) });
+    return json({ job: await toPublicJob(paidJob, true) });
   } catch (error) {
-    logError({
+    await logError({
       event: "stripe_checkout_confirm_failed",
       jobId: job.id,
       user: job.email,

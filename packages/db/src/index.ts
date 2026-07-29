@@ -1,7 +1,22 @@
-import Database from "better-sqlite3";
 import { randomBytes, randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { mkdirSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
+import { PrismaPg } from "@prisma/adapter-pg";
+import {
+  DispatchStatus,
+  EmailDeliveryStatus,
+  GenerationJobStatus,
+  Prisma,
+  PrismaClient,
+  type GeneratedAsset as PrismaGeneratedAsset,
+  type GenerationJob as PrismaGenerationJob,
+  type MarketingPost as PrismaMarketingPost,
+  type MarketingTarget as PrismaMarketingTarget,
+  type PrintOrder as PrismaPrintOrder
+} from "./generated/prisma/client.ts";
+
+type JsonRecord = Record<string, unknown>;
 
 export type JobStatus = "queued" | "processing" | "completed" | "failed";
 
@@ -13,7 +28,8 @@ export type JobStep =
   | "Building mosaic"
   | "Generating exports"
   | "Done"
-  | "Failed";
+  | "Failed"
+  | string;
 
 export type Job = {
   id: string;
@@ -21,7 +37,7 @@ export type Job = {
   email: string;
   status: JobStatus;
   progress: number;
-  step: JobStep | string;
+  step: JobStep;
   ig_public: number | null;
   ig_post_count: number | null;
   downloaded_count: number;
@@ -76,6 +92,17 @@ export type PublicJob = {
   mosaicWidth: number | null;
   mosaicHeight: number | null;
   printOrder: PublicPrintOrder | null;
+  assets?: PublicGeneratedAsset[];
+};
+
+export type PublicGeneratedAsset = {
+  id: string;
+  type: string;
+  contentType: string;
+  size: number | null;
+  width: number | null;
+  height: number | null;
+  createdAt: string;
 };
 
 export type PublicPrintOrder = {
@@ -97,7 +124,7 @@ export type CreateJobInput = {
   heroPath: string;
   outputDir: string;
   ipAddress?: string | null;
-  metadata?: Record<string, unknown>;
+  metadata?: JsonRecord;
 };
 
 export type PrintOrder = {
@@ -117,365 +144,450 @@ export type PrintOrder = {
   updated_at: string;
 };
 
+export type MarketingTarget = {
+  id: number;
+  instagram_username: string;
+  display_name: string | null;
+  category: string;
+  priority: number;
+  status: string;
+  notes: string | null;
+  rights_status: string;
+  rights_notes: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type MarketingPost = {
+  id: number;
+  target_id: number | null;
+  job_id: string | null;
+  kind: string;
+  status: string;
+  caption: string;
+  best_asset_type: string | null;
+  best_asset_path: string | null;
+  reveal_video_path: string | null;
+  planned_for: string | null;
+  approved_at: string | null;
+  published_at: string | null;
+  permalink: string | null;
+  publish_notes: string | null;
+  error_message: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type InstagramMention = {
+  id: number;
+  source_url: string;
+  username: string | null;
+  text: string | null;
+  status: string;
+  permission_status: string;
+  notes: string | null;
+  reviewed_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type GeneratedAsset = {
+  id: string;
+  job_id: string;
+  type: string;
+  bucket: string;
+  object_key: string;
+  content_type: string;
+  size: number | null;
+  width: number | null;
+  height: number | null;
+  checksum: string | null;
+  etag: string | null;
+  created_at: string;
+};
+
 export type RateLimitResult = {
   allowed: boolean;
   remaining: number;
   retryAfterSeconds: number;
 };
 
-let db: Database.Database | null = null;
+const globalForPrisma = globalThis as unknown as { prisma?: PrismaClient };
+
+export const prisma =
+  globalForPrisma.prisma ??
+  createPrismaClient();
+
+if (process.env.NODE_ENV !== "production") {
+  globalForPrisma.prisma = prisma;
+}
+
+function createPrismaClient(): PrismaClient {
+  const databaseUrl = process.env.DATABASE_URL;
+  if (!databaseUrl) throw new Error("DATABASE_URL is required.");
+
+  if (databaseUrl.startsWith("prisma://") || databaseUrl.startsWith("prisma+postgres://")) {
+    return new PrismaClient({ accelerateUrl: databaseUrl });
+  }
+
+  return new PrismaClient({
+    adapter: new PrismaPg({ connectionString: databaseUrl })
+  });
+}
 
 export function nowIso(date = new Date()): string {
   return date.toISOString();
 }
 
 export function appRoot(): string {
-  let directory = process.cwd();
-  for (let depth = 0; depth < 8; depth += 1) {
-    const packageJson = path.join(directory, "package.json");
-    if (existsSync(packageJson)) {
-      try {
-        const parsed = JSON.parse(readFileSync(packageJson, "utf8")) as { workspaces?: unknown };
-        if (Array.isArray(parsed.workspaces)) return directory;
-      } catch {
-        // Keep walking if package.json is unreadable.
-      }
-    }
-    const parent = path.dirname(directory);
-    if (parent === directory) break;
-    directory = parent;
-  }
   return process.cwd();
 }
 
 export function storageDir(): string {
-  return path.resolve(appRoot(), "storage");
+  const directory = path.join(os.tmpdir(), "instamosaic");
+  mkdirSync(directory, { recursive: true });
+  return directory;
 }
 
 export function dbPath(): string {
-  return path.join(storageDir(), "instamosaic.sqlite");
+  throw new Error("SQLite has been removed. Use Prisma Postgres via DATABASE_URL and DIRECT_URL.");
 }
 
 export function randomToken(bytes = 24): string {
   return randomBytes(bytes).toString("hex");
 }
 
-export function getDb(): Database.Database {
-  if (db) return db;
-  const filename = dbPath();
-  mkdirSync(path.dirname(filename), { recursive: true });
-  db = new Database(filename);
-  db.pragma("journal_mode = WAL");
-  db.pragma("foreign_keys = ON");
-  initDb(db);
-  return db;
+export async function initDb(): Promise<void> {
+  await prisma.$connect();
 }
 
-export function initDb(database = getDb()): void {
-  database.exec(`
-    CREATE TABLE IF NOT EXISTS jobs (
-      id TEXT PRIMARY KEY,
-      username TEXT NOT NULL,
-      email TEXT NOT NULL,
-      status TEXT NOT NULL DEFAULT 'queued',
-      progress INTEGER NOT NULL DEFAULT 5,
-      step TEXT NOT NULL DEFAULT 'Job created',
-      ig_public INTEGER,
-      ig_post_count INTEGER,
-      downloaded_count INTEGER NOT NULL DEFAULT 0,
-      skipped_count INTEGER NOT NULL DEFAULT 0,
-      photos_used INTEGER NOT NULL DEFAULT 0,
-      processing_started_at TEXT,
-      processing_completed_at TEXT,
-      created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL,
-      error_message TEXT,
-      retry_count INTEGER NOT NULL DEFAULT 0,
-      paid_at TEXT,
-      amount_paid_cents INTEGER,
-      currency TEXT,
-      stripe_session_id TEXT,
-      hero_path TEXT NOT NULL,
-      output_dir TEXT NOT NULL,
-      preview_path TEXT,
-      square_preview_path TEXT,
-      download_token TEXT NOT NULL UNIQUE,
-      ip_address TEXT,
-      metadata TEXT
-    );
-
-    CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status, created_at);
-    CREATE INDEX IF NOT EXISTS idx_jobs_email_status ON jobs(email, status);
-    CREATE INDEX IF NOT EXISTS idx_jobs_ip_status ON jobs(ip_address, status);
-    CREATE INDEX IF NOT EXISTS idx_jobs_stripe_session ON jobs(stripe_session_id);
-
-    CREATE TABLE IF NOT EXISTS analytics_events (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      job_id TEXT,
-      event TEXT NOT NULL,
-      user TEXT,
-      ip TEXT,
-      metadata TEXT,
-      created_at TEXT NOT NULL,
-      FOREIGN KEY(job_id) REFERENCES jobs(id) ON DELETE SET NULL
-    );
-
-    CREATE INDEX IF NOT EXISTS idx_events_event_created ON analytics_events(event, created_at);
-    CREATE INDEX IF NOT EXISTS idx_events_job ON analytics_events(job_id, created_at);
-
-    CREATE TABLE IF NOT EXISTS logs (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      job_id TEXT,
-      level TEXT NOT NULL DEFAULT 'info',
-      event TEXT NOT NULL,
-      user TEXT,
-      message TEXT NOT NULL,
-      stack TEXT,
-      metadata TEXT,
-      created_at TEXT NOT NULL,
-      FOREIGN KEY(job_id) REFERENCES jobs(id) ON DELETE SET NULL
-    );
-
-    CREATE INDEX IF NOT EXISTS idx_logs_level_created ON logs(level, created_at);
-    CREATE INDEX IF NOT EXISTS idx_logs_job ON logs(job_id, created_at);
-
-    CREATE TABLE IF NOT EXISTS downloads (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      job_id TEXT NOT NULL,
-      token TEXT NOT NULL,
-      output_type TEXT NOT NULL,
-      ip TEXT,
-      started_at TEXT NOT NULL,
-      completed_at TEXT,
-      FOREIGN KEY(job_id) REFERENCES jobs(id) ON DELETE CASCADE
-    );
-
-    CREATE INDEX IF NOT EXISTS idx_downloads_job ON downloads(job_id, started_at);
-
-    CREATE TABLE IF NOT EXISTS rate_limits (
-      scope TEXT NOT NULL,
-      identity TEXT NOT NULL,
-      window_start_ms INTEGER NOT NULL,
-      count INTEGER NOT NULL,
-      PRIMARY KEY(scope, identity)
-    );
-
-    CREATE TABLE IF NOT EXISTS print_orders (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      job_id TEXT NOT NULL,
-      stripe_session_id TEXT NOT NULL UNIQUE,
-      external_order_number TEXT NOT NULL UNIQUE,
-      status TEXT NOT NULL,
-      printshrimp_order_id TEXT,
-      tracking TEXT,
-      tracking_courier TEXT,
-      completed INTEGER,
-      request_payload TEXT,
-      response_payload TEXT,
-      error_message TEXT,
-      created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL,
-      FOREIGN KEY(job_id) REFERENCES jobs(id) ON DELETE CASCADE
-    );
-
-    CREATE INDEX IF NOT EXISTS idx_print_orders_job ON print_orders(job_id, created_at);
-  `);
-  ensureColumn(database, "print_orders", "tracking", "TEXT");
-  ensureColumn(database, "print_orders", "tracking_courier", "TEXT");
-  ensureColumn(database, "print_orders", "completed", "INTEGER");
+export async function closeDb(): Promise<void> {
+  await prisma.$disconnect();
 }
 
-export function closeDb(): void {
-  if (!db) return;
-  db.close();
-  db = null;
-}
-
-function ensureColumn(database: Database.Database, table: string, column: string, definition: string): void {
-  const columns = database.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
-  if (columns.some((entry) => entry.name === column)) return;
-  database.prepare(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`).run();
-}
-
-export function createJob(input: CreateJobInput): Job {
-  const database = getDb();
+export async function createJob(input: CreateJobInput): Promise<Job> {
   const id = input.id ?? randomUUID();
-  const createdAt = nowIso();
   const token = randomToken();
-  database
-    .prepare(
-      `INSERT INTO jobs (
-        id, username, email, status, progress, step, created_at, updated_at,
-        hero_path, output_dir, download_token, ip_address, metadata
-      ) VALUES (
-        @id, @username, @email, 'queued', 5, 'Job created', @createdAt, @createdAt,
-        @heroPath, @outputDir, @downloadToken, @ipAddress, @metadata
-      )`
-    )
-    .run({
+  const metadata = input.metadata ?? {};
+  const job = await prisma.generationJob.create({
+    data: {
       id,
       username: input.username,
       email: input.email,
-      createdAt,
-      heroPath: input.heroPath,
-      outputDir: input.outputDir,
       downloadToken: token,
       ipAddress: input.ipAddress ?? null,
-      metadata: JSON.stringify(input.metadata ?? {})
-    });
-
-  const job = getJob(id);
-  if (!job) throw new Error("Job insert failed");
-  trackEvent({ event: "job_created", jobId: id, user: input.email, ip: input.ipAddress ?? undefined });
-  logInfo({ event: "job_created", jobId: id, user: input.email, message: `Created job for ${input.username}` });
-  return job;
+      input: {
+        heroPath: input.heroPath,
+        outputDir: input.outputDir
+      },
+      metadata: toJson(metadata),
+      stage: "QUEUED",
+      progress: 5
+    }
+  });
+  await trackEvent({ event: "job_created", jobId: id, user: input.email, ip: input.ipAddress ?? undefined });
+  await logInfo({ event: "job_created", jobId: id, user: input.email, message: `Created job for ${input.username}` });
+  return toLegacyJob(job);
 }
 
-export function getJob(id: string): Job | null {
-  return (getDb().prepare("SELECT * FROM jobs WHERE id = ?").get(id) as Job | undefined) ?? null;
+export async function getJob(id: string): Promise<Job | null> {
+  const job = await prisma.generationJob.findUnique({ where: { id } });
+  return job ? toLegacyJob(job) : null;
 }
 
-export function getJobByDownloadToken(token: string): Job | null {
-  return (getDb().prepare("SELECT * FROM jobs WHERE download_token = ?").get(token) as Job | undefined) ?? null;
+export async function getJobByDownloadToken(token: string): Promise<Job | null> {
+  const job = await prisma.generationJob.findUnique({ where: { downloadToken: token } });
+  return job ? toLegacyJob(job) : null;
 }
 
-export function getJobByStripeSession(sessionId: string): Job | null {
-  return (getDb().prepare("SELECT * FROM jobs WHERE stripe_session_id = ?").get(sessionId) as Job | undefined) ?? null;
+export async function getJobByStripeSession(sessionId: string): Promise<Job | null> {
+  const job = await prisma.generationJob.findUnique({ where: { stripeSessionId: sessionId } });
+  return job ? toLegacyJob(job) : null;
 }
 
-const jobPatchFields = new Set([
-  "status",
-  "progress",
-  "step",
-  "ig_public",
-  "ig_post_count",
-  "downloaded_count",
-  "skipped_count",
-  "photos_used",
-  "processing_started_at",
-  "processing_completed_at",
-  "error_message",
-  "retry_count",
-  "paid_at",
-  "amount_paid_cents",
-  "currency",
-  "stripe_session_id",
-  "preview_path",
-  "square_preview_path",
-  "metadata"
-]);
-
-export function updateJob(id: string, patch: Partial<Job>): Job {
-  const entries = Object.entries(patch).filter(([key, value]) => jobPatchFields.has(key) && value !== undefined);
-  if (entries.length === 0) {
-    const job = getJob(id);
-    if (!job) throw new Error(`Job not found: ${id}`);
-    return job;
+export async function updateJob(id: string, patch: Partial<Job>): Promise<Job> {
+  const data: Prisma.GenerationJobUpdateInput = {};
+  if (patch.status !== undefined) data.status = legacyStatusToPrisma(patch.status);
+  if (patch.progress !== undefined) data.progress = patch.progress;
+  if (patch.step !== undefined) data.stage = stageFromLegacyStep(patch.step);
+  if (patch.ig_public !== undefined) data.igPublic = patch.ig_public == null ? null : patch.ig_public === 1;
+  if (patch.ig_post_count !== undefined) data.igPostCount = patch.ig_post_count;
+  if (patch.downloaded_count !== undefined) data.downloadedCount = patch.downloaded_count;
+  if (patch.skipped_count !== undefined) data.skippedCount = patch.skipped_count;
+  if (patch.photos_used !== undefined) data.photosUsed = patch.photos_used;
+  if (patch.processing_started_at !== undefined) data.processingStartedAt = dateOrNull(patch.processing_started_at);
+  if (patch.processing_completed_at !== undefined) {
+    const completed = dateOrNull(patch.processing_completed_at);
+    data.completedAt = completed;
+    if (completed && patch.status === "completed") data.failedAt = null;
   }
+  if (patch.error_message !== undefined) data.errorMessage = patch.error_message;
+  if (patch.retry_count !== undefined) data.attemptCount = patch.retry_count;
+  if (patch.paid_at !== undefined) data.paidAt = dateOrNull(patch.paid_at);
+  if (patch.amount_paid_cents !== undefined) data.amountPaidCents = patch.amount_paid_cents;
+  if (patch.currency !== undefined) data.currency = patch.currency;
+  if (patch.stripe_session_id !== undefined) data.stripeSessionId = patch.stripe_session_id;
+  if (patch.metadata !== undefined) data.metadata = toJson(parseJsonRecord(patch.metadata));
+  if (patch.status === "failed") data.failedAt = new Date();
+  if (Object.keys(data).length === 0) {
+    const current = await getJob(id);
+    if (!current) throw new Error(`Job not found: ${id}`);
+    return current;
+  }
+  const job = await prisma.generationJob.update({ where: { id }, data });
+  return toLegacyJob(job);
+}
 
-  const updatedAt = nowIso();
-  const assignments = entries.map(([key]) => `${key} = @${key}`).join(", ");
-  getDb()
-    .prepare(`UPDATE jobs SET ${assignments}, updated_at = @updatedAt WHERE id = @id`)
-    .run({
+export async function claimNextJob(): Promise<Job | null> {
+  const candidate = await prisma.generationJob.findFirst({
+    where: { status: GenerationJobStatus.QUEUED },
+    orderBy: { createdAt: "asc" }
+  });
+  if (!candidate) return null;
+  const claimed = await claimJob(candidate.id);
+  return claimed;
+}
+
+export async function claimJob(id: string): Promise<Job | null> {
+  const now = new Date();
+  const result = await prisma.generationJob.updateMany({
+    where: {
       id,
-      updatedAt,
-      ...Object.fromEntries(entries)
-    });
-
-  const job = getJob(id);
-  if (!job) throw new Error(`Job not found after update: ${id}`);
-  return job;
+      status: GenerationJobStatus.QUEUED
+    },
+    data: {
+      status: GenerationJobStatus.PROCESSING,
+      progress: 5,
+      stage: "QUEUED",
+      processingStartedAt: now,
+      heartbeatAt: now,
+      attemptCount: { increment: 1 },
+      errorMessage: null,
+      errorCode: null
+    }
+  });
+  if (result.count === 0) return getJob(id);
+  return getJob(id);
 }
 
-export function claimNextJob(): Job | null {
-  const database = getDb();
-  const now = nowIso();
-  const row = database
-    .prepare(
-      `SELECT * FROM jobs
-       WHERE status = 'queued'
-       ORDER BY created_at ASC
-       LIMIT 1`
-    )
-    .get() as Job | undefined;
-
-  if (!row) return null;
-
-  const result = database
-    .prepare(
-      `UPDATE jobs
-       SET status = 'processing', progress = 5, step = 'Job created',
-           processing_started_at = COALESCE(processing_started_at, @now),
-           updated_at = @now
-       WHERE id = @id AND status = 'queued'`
-    )
-    .run({ id: row.id, now });
-
-  if (result.changes === 0) return null;
-  return getJob(row.id);
+export async function incrementJobRetry(id: string): Promise<void> {
+  await prisma.generationJob.update({ where: { id }, data: { attemptCount: { increment: 1 } } });
 }
 
-export function incrementJobRetry(id: string): void {
-  getDb().prepare("UPDATE jobs SET retry_count = retry_count + 1, updated_at = ? WHERE id = ?").run(nowIso(), id);
-}
-
-export function markJobPaid(input: {
+export async function markJobPaid(input: {
   jobId: string;
   stripeSessionId?: string | null;
   amountPaidCents?: number | null;
   currency?: string | null;
-}): Job {
-  return updateJob(input.jobId, {
-    paid_at: nowIso(),
-    stripe_session_id: input.stripeSessionId ?? null,
-    amount_paid_cents: input.amountPaidCents ?? null,
-    currency: input.currency ?? null
+}): Promise<Job> {
+  const job = await prisma.generationJob.update({
+    where: { id: input.jobId },
+    data: {
+      paidAt: new Date(),
+      stripeSessionId: input.stripeSessionId ?? null,
+      amountPaidCents: input.amountPaidCents ?? null,
+      currency: input.currency ?? null
+    }
+  });
+  return toLegacyJob(job);
+}
+
+export async function recordGeneratedAsset(input: {
+  jobId: string;
+  type: string;
+  bucket: string;
+  objectKey: string;
+  contentType: string;
+  size?: number | null;
+  width?: number | null;
+  height?: number | null;
+  checksum?: string | null;
+  etag?: string | null;
+}): Promise<GeneratedAsset> {
+  const asset = await prisma.generatedAsset.upsert({
+    where: { jobId_type: { jobId: input.jobId, type: input.type } },
+    create: {
+      jobId: input.jobId,
+      type: input.type,
+      bucket: input.bucket,
+      objectKey: input.objectKey,
+      contentType: input.contentType,
+      size: input.size ?? null,
+      width: input.width ?? null,
+      height: input.height ?? null,
+      checksum: input.checksum ?? null,
+      etag: input.etag ?? null
+    },
+    update: {
+      bucket: input.bucket,
+      objectKey: input.objectKey,
+      contentType: input.contentType,
+      size: input.size ?? null,
+      width: input.width ?? null,
+      height: input.height ?? null,
+      checksum: input.checksum ?? null,
+      etag: input.etag ?? null
+    }
+  });
+  return toLegacyAsset(asset);
+}
+
+export async function listGeneratedAssets(jobId: string): Promise<GeneratedAsset[]> {
+  const assets = await prisma.generatedAsset.findMany({ where: { jobId }, orderBy: { createdAt: "asc" } });
+  return assets.map(toLegacyAsset);
+}
+
+export async function getGeneratedAsset(jobId: string, type: string): Promise<GeneratedAsset | null> {
+  const asset = await prisma.generatedAsset.findUnique({ where: { jobId_type: { jobId, type } } });
+  return asset ? toLegacyAsset(asset) : null;
+}
+
+export async function createJobDispatch(jobId: string): Promise<void> {
+  await prisma.jobDispatch.create({ data: { jobId } });
+}
+
+export async function markJobDispatchSent(input: { id?: string; jobId: string; taskName?: string | null }): Promise<void> {
+  const dispatch = input.id
+    ? await prisma.jobDispatch.findUnique({ where: { id: input.id } })
+    : await prisma.jobDispatch.findFirst({ where: { jobId: input.jobId, status: DispatchStatus.PENDING }, orderBy: { createdAt: "asc" } });
+  if (!dispatch) return;
+  await prisma.jobDispatch.update({
+    where: { id: dispatch.id },
+    data: { status: DispatchStatus.SENT, taskName: input.taskName ?? null, sentAt: new Date(), errorMessage: null }
   });
 }
 
-export function getPrintOrderByStripeSession(sessionId: string): PrintOrder | null {
-  return (getDb().prepare("SELECT * FROM print_orders WHERE stripe_session_id = ?").get(sessionId) as PrintOrder | undefined) ?? null;
+export async function markJobDispatchFailed(input: { jobId: string; errorMessage: string }): Promise<void> {
+  const dispatch = await prisma.jobDispatch.findFirst({ where: { jobId: input.jobId, status: DispatchStatus.PENDING }, orderBy: { createdAt: "asc" } });
+  if (!dispatch) return;
+  await prisma.jobDispatch.update({
+    where: { id: dispatch.id },
+    data: { status: DispatchStatus.FAILED, errorMessage: input.errorMessage }
+  });
 }
 
-export function getPrintOrder(id: number): PrintOrder | null {
-  return (getDb().prepare("SELECT * FROM print_orders WHERE id = ?").get(id) as PrintOrder | undefined) ?? null;
+export async function markCompletionEmailSent(input: { jobId: string; providerMessageId?: string | null }): Promise<void> {
+  const now = new Date();
+  await prisma.$transaction([
+    prisma.emailDelivery.upsert({
+      where: { jobId_kind: { jobId: input.jobId, kind: "completion" } },
+      create: {
+        jobId: input.jobId,
+        kind: "completion",
+        recipient: "",
+        status: EmailDeliveryStatus.SENT,
+        providerMessageId: input.providerMessageId ?? null,
+        sentAt: now
+      },
+      update: {
+        status: EmailDeliveryStatus.SENT,
+        providerMessageId: input.providerMessageId ?? null,
+        sentAt: now,
+        errorMessage: null
+      }
+    }),
+    prisma.generationJob.update({ where: { id: input.jobId }, data: { completionEmailSentAt: now } })
+  ]);
 }
 
-export function getLatestPrintOrderForJob(jobId: string): PrintOrder | null {
-  return (getDb()
-    .prepare("SELECT * FROM print_orders WHERE job_id = ? ORDER BY created_at DESC LIMIT 1")
-    .get(jobId) as PrintOrder | undefined) ?? null;
+export async function claimEmailDelivery(input: { jobId: string; kind: string; recipient: string; staleAfterMs?: number }): Promise<boolean> {
+  try {
+    await prisma.emailDelivery.create({
+      data: {
+        jobId: input.jobId,
+        kind: input.kind,
+        recipient: input.recipient,
+        status: EmailDeliveryStatus.PENDING
+      }
+    });
+    return true;
+  } catch (error) {
+    if (!isUniqueConstraintError(error)) throw error;
+  }
+
+  const staleCutoff = new Date(Date.now() - (input.staleAfterMs ?? 30 * 60_000));
+  const claimed = await prisma.emailDelivery.updateMany({
+    where: {
+      jobId: input.jobId,
+      kind: input.kind,
+      OR: [
+        { status: EmailDeliveryStatus.FAILED },
+        { status: EmailDeliveryStatus.PENDING, updatedAt: { lt: staleCutoff } }
+      ]
+    },
+    data: {
+      recipient: input.recipient,
+      status: EmailDeliveryStatus.PENDING,
+      errorMessage: null,
+      providerMessageId: null
+    }
+  });
+  return claimed.count > 0;
 }
 
-export function createPrintOrder(input: {
+export async function markEmailDeliverySent(input: { jobId: string; kind: string; providerMessageId?: string | null }): Promise<void> {
+  const now = new Date();
+  await prisma.emailDelivery.update({
+    where: { jobId_kind: { jobId: input.jobId, kind: input.kind } },
+    data: {
+      status: EmailDeliveryStatus.SENT,
+      providerMessageId: input.providerMessageId ?? null,
+      sentAt: now,
+      errorMessage: null
+    }
+  });
+  if (input.kind === "completion") {
+    await prisma.generationJob.update({ where: { id: input.jobId }, data: { completionEmailSentAt: now } });
+  }
+  if (input.kind === "failure") {
+    await prisma.generationJob.update({ where: { id: input.jobId }, data: { failureEmailSentAt: now } });
+  }
+}
+
+export async function markEmailDeliveryFailed(input: { jobId: string; kind: string; errorMessage: string }): Promise<void> {
+  await prisma.emailDelivery.update({
+    where: { jobId_kind: { jobId: input.jobId, kind: input.kind } },
+    data: {
+      status: EmailDeliveryStatus.FAILED,
+      errorMessage: input.errorMessage
+    }
+  });
+}
+
+export async function getPrintOrderByStripeSession(sessionId: string): Promise<PrintOrder | null> {
+  const order = await prisma.printOrder.findUnique({ where: { stripeSessionId: sessionId } });
+  return order ? toLegacyPrintOrder(order) : null;
+}
+
+export async function getPrintOrder(id: number): Promise<PrintOrder | null> {
+  const order = await prisma.printOrder.findUnique({ where: { id } });
+  return order ? toLegacyPrintOrder(order) : null;
+}
+
+export async function getLatestPrintOrderForJob(jobId: string): Promise<PrintOrder | null> {
+  const order = await prisma.printOrder.findFirst({ where: { jobId }, orderBy: { createdAt: "desc" } });
+  return order ? toLegacyPrintOrder(order) : null;
+}
+
+export async function createPrintOrder(input: {
   jobId: string;
   stripeSessionId: string;
   externalOrderNumber: string;
   requestPayload: unknown;
-}): PrintOrder {
-  const now = nowIso();
-  getDb()
-    .prepare(
-      `INSERT INTO print_orders (
-        job_id, stripe_session_id, external_order_number, status, request_payload, created_at, updated_at
-      ) VALUES (
-        @jobId, @stripeSessionId, @externalOrderNumber, 'submitting', @requestPayload, @now, @now
-      )`
-    )
-    .run({
+}): Promise<PrintOrder> {
+  const order = await prisma.printOrder.create({
+    data: {
       jobId: input.jobId,
       stripeSessionId: input.stripeSessionId,
       externalOrderNumber: input.externalOrderNumber,
-      requestPayload: JSON.stringify(input.requestPayload),
-      now
-    });
-  const order = getPrintOrderByStripeSession(input.stripeSessionId);
-  if (!order) throw new Error("Print order insert failed");
-  return order;
+      status: "submitting",
+      requestPayload: toJson(input.requestPayload)
+    }
+  });
+  return toLegacyPrintOrder(order);
 }
 
-export function markPrintOrderSubmitted(input: {
+export async function markPrintOrderSubmitted(input: {
   stripeSessionId: string;
   printshrimpOrderId?: string | null;
   responsePayload: unknown;
@@ -483,33 +595,22 @@ export function markPrintOrderSubmitted(input: {
   tracking?: string | null;
   trackingCourier?: string | null;
   completed?: boolean | null;
-}): void {
-  getDb()
-    .prepare(
-      `UPDATE print_orders
-       SET status = COALESCE(@status, 'submitted'),
-           printshrimp_order_id = @printshrimpOrderId,
-           tracking = @tracking,
-           tracking_courier = @trackingCourier,
-           completed = @completed,
-           response_payload = @responsePayload,
-           error_message = NULL,
-           updated_at = @updatedAt
-       WHERE stripe_session_id = @stripeSessionId`
-    )
-    .run({
-      stripeSessionId: input.stripeSessionId,
+}): Promise<void> {
+  await prisma.printOrder.update({
+    where: { stripeSessionId: input.stripeSessionId },
+    data: {
+      status: input.status ?? "submitted",
       printshrimpOrderId: input.printshrimpOrderId ?? null,
-      status: input.status ?? null,
       tracking: input.tracking ?? null,
       trackingCourier: input.trackingCourier ?? null,
-      completed: input.completed == null ? null : input.completed ? 1 : 0,
-      responsePayload: JSON.stringify(input.responsePayload),
-      updatedAt: nowIso()
-    });
+      completed: input.completed ?? null,
+      responsePayload: toJson(input.responsePayload),
+      errorMessage: null
+    }
+  });
 }
 
-export function updatePrintOrderStatus(input: {
+export async function updatePrintOrderStatus(input: {
   stripeSessionId: string;
   printshrimpOrderId?: string | null;
   status?: string | null;
@@ -517,61 +618,193 @@ export function updatePrintOrderStatus(input: {
   trackingCourier?: string | null;
   completed?: boolean | null;
   responsePayload: unknown;
-}): void {
-  getDb()
-    .prepare(
-      `UPDATE print_orders
-       SET printshrimp_order_id = COALESCE(@printshrimpOrderId, printshrimp_order_id),
-           status = COALESCE(@status, status),
-           tracking = @tracking,
-           tracking_courier = @trackingCourier,
-           completed = @completed,
-           response_payload = @responsePayload,
-           error_message = NULL,
-           updated_at = @updatedAt
-       WHERE stripe_session_id = @stripeSessionId`
-    )
-    .run({
-      stripeSessionId: input.stripeSessionId,
-      printshrimpOrderId: input.printshrimpOrderId ?? null,
-      status: input.status ?? null,
-      tracking: input.tracking ?? null,
-      trackingCourier: input.trackingCourier ?? null,
-      completed: input.completed == null ? null : input.completed ? 1 : 0,
-      responsePayload: JSON.stringify(input.responsePayload),
-      updatedAt: nowIso()
-    });
+}): Promise<void> {
+  const data: Prisma.PrintOrderUpdateInput = {
+    tracking: input.tracking ?? null,
+    trackingCourier: input.trackingCourier ?? null,
+    completed: input.completed ?? null,
+    responsePayload: toJson(input.responsePayload),
+    errorMessage: null
+  };
+  if (input.printshrimpOrderId !== undefined) data.printshrimpOrderId = input.printshrimpOrderId;
+  if (input.status != null) data.status = input.status;
+  await prisma.printOrder.update({
+    where: { stripeSessionId: input.stripeSessionId },
+    data
+  });
 }
 
-export function markPrintOrderFailed(input: {
+export async function markPrintOrderFailed(input: {
   stripeSessionId: string;
   errorMessage: string;
   responsePayload?: unknown;
-}): void {
-  getDb()
-    .prepare(
-      `UPDATE print_orders
-       SET status = 'failed',
-           error_message = @errorMessage,
-           response_payload = COALESCE(@responsePayload, response_payload),
-           updated_at = @updatedAt
-       WHERE stripe_session_id = @stripeSessionId`
-    )
-    .run({
-      stripeSessionId: input.stripeSessionId,
+}): Promise<void> {
+  await prisma.printOrder.update({
+    where: { stripeSessionId: input.stripeSessionId },
+    data: {
+      status: "failed",
       errorMessage: input.errorMessage,
-      responsePayload: input.responsePayload == null ? null : JSON.stringify(input.responsePayload),
-      updatedAt: nowIso()
-    });
+      ...(input.responsePayload == null ? {} : { responsePayload: toJson(input.responsePayload) })
+    }
+  });
 }
 
-export function toPublicJob(job: Job, includeDownloadToken = false): PublicJob {
+export async function upsertMarketingTarget(input: {
+  instagramUsername: string;
+  displayName?: string | null;
+  category?: string | null;
+  priority?: number | null;
+  status?: string | null;
+  notes?: string | null;
+  rightsStatus?: string | null;
+  rightsNotes?: string | null;
+}): Promise<MarketingTarget> {
+  const existing = await prisma.marketingTarget.findUnique({ where: { instagramUsername: input.instagramUsername } });
+  const target = await prisma.marketingTarget.upsert({
+    where: { instagramUsername: input.instagramUsername },
+    create: {
+      instagramUsername: input.instagramUsername,
+      displayName: input.displayName ?? null,
+      category: input.category || "creator",
+      priority: input.priority ?? 0,
+      status: input.status || "active",
+      notes: input.notes ?? null,
+      rightsStatus: input.rightsStatus || "unknown",
+      rightsNotes: input.rightsNotes ?? null
+    },
+    update: {
+      displayName: input.displayName ?? existing?.displayName ?? null,
+      category: input.category || existing?.category || "creator",
+      priority: input.priority ?? existing?.priority ?? 0,
+      status: input.status || existing?.status || "active",
+      notes: input.notes ?? existing?.notes ?? null,
+      rightsStatus: input.rightsStatus ?? existing?.rightsStatus ?? "unknown",
+      rightsNotes: input.rightsNotes ?? existing?.rightsNotes ?? null
+    }
+  });
+  return toLegacyMarketingTarget(target);
+}
+
+export async function getMarketingTargetByUsername(username: string): Promise<MarketingTarget | null> {
+  const target = await prisma.marketingTarget.findFirst({ where: { instagramUsername: { equals: username, mode: "insensitive" } } });
+  return target ? toLegacyMarketingTarget(target) : null;
+}
+
+export async function createMarketingPost(input: {
+  targetId?: number | null;
+  jobId?: string | null;
+  kind?: string | null;
+  status?: string | null;
+  caption: string;
+  bestAssetType?: string | null;
+  bestAssetPath?: string | null;
+  revealVideoPath?: string | null;
+  plannedFor?: string | null;
+}): Promise<MarketingPost> {
+  const post = await prisma.marketingPost.create({
+    data: {
+      targetId: input.targetId ?? null,
+      jobId: input.jobId ?? null,
+      kind: input.kind || "reel",
+      status: input.status || "draft",
+      caption: input.caption,
+      bestAssetType: input.bestAssetType ?? null,
+      bestAssetPath: input.bestAssetPath ?? null,
+      revealVideoPath: input.revealVideoPath ?? null,
+      plannedFor: dateOrNull(input.plannedFor)
+    }
+  });
+  await trackEvent({ event: "marketing_post_created", jobId: input.jobId ?? undefined, metadata: { marketingPostId: post.id, targetId: input.targetId ?? null } });
+  return toLegacyMarketingPost(post);
+}
+
+export async function getMarketingPost(id: number): Promise<MarketingPost | null> {
+  const post = await prisma.marketingPost.findUnique({ where: { id } });
+  return post ? toLegacyMarketingPost(post) : null;
+}
+
+export async function updateMarketingPost(id: number, patch: Partial<MarketingPost>): Promise<MarketingPost> {
+  const post = await prisma.marketingPost.update({
+    where: { id },
+    data: {
+      ...(patch.status !== undefined ? { status: patch.status } : {}),
+      ...(patch.caption !== undefined ? { caption: patch.caption } : {}),
+      ...(patch.best_asset_type !== undefined ? { bestAssetType: patch.best_asset_type } : {}),
+      ...(patch.best_asset_path !== undefined ? { bestAssetPath: patch.best_asset_path } : {}),
+      ...(patch.reveal_video_path !== undefined ? { revealVideoPath: patch.reveal_video_path } : {}),
+      ...(patch.planned_for !== undefined ? { plannedFor: dateOrNull(patch.planned_for) } : {}),
+      ...(patch.approved_at !== undefined ? { approvedAt: dateOrNull(patch.approved_at) } : {}),
+      ...(patch.published_at !== undefined ? { publishedAt: dateOrNull(patch.published_at) } : {}),
+      ...(patch.permalink !== undefined ? { permalink: patch.permalink } : {}),
+      ...(patch.publish_notes !== undefined ? { publishNotes: patch.publish_notes } : {}),
+      ...(patch.error_message !== undefined ? { errorMessage: patch.error_message } : {})
+    }
+  });
+  return toLegacyMarketingPost(post);
+}
+
+export async function listRecentMarketingPosts(limit = 20): Promise<MarketingPost[]> {
+  const posts = await prisma.marketingPost.findMany({ orderBy: { createdAt: "desc" }, take: Math.max(1, Math.min(100, limit)) });
+  return posts.map(toLegacyMarketingPost);
+}
+
+export async function listMarketingTargets(limit = 100): Promise<MarketingTarget[]> {
+  const targets = await prisma.marketingTarget.findMany({
+    orderBy: [{ status: "asc" }, { priority: "desc" }, { updatedAt: "desc" }],
+    take: Math.max(1, Math.min(500, limit))
+  });
+  return targets.map(toLegacyMarketingTarget);
+}
+
+export async function createInstagramMention(input: {
+  sourceUrl: string;
+  username?: string | null;
+  text?: string | null;
+  status?: string | null;
+  permissionStatus?: string | null;
+  notes?: string | null;
+}): Promise<InstagramMention> {
+  const update: Prisma.InstagramMentionUpdateInput = {
+    status: input.status || "new",
+    permissionStatus: input.permissionStatus || "unknown"
+  };
+  if (input.username !== undefined) update.username = input.username;
+  if (input.text !== undefined) update.text = input.text;
+  if (input.notes !== undefined) update.notes = input.notes;
+  const mention = await prisma.instagramMention.upsert({
+    where: { sourceUrl: input.sourceUrl },
+    create: {
+      sourceUrl: input.sourceUrl,
+      username: input.username ?? null,
+      text: input.text ?? null,
+      status: input.status || "new",
+      permissionStatus: input.permissionStatus || "unknown",
+      notes: input.notes ?? null
+    },
+    update
+  });
+  return {
+    id: mention.id,
+    source_url: mention.sourceUrl,
+    username: mention.username,
+    text: mention.text,
+    status: mention.status,
+    permission_status: mention.permissionStatus,
+    notes: mention.notes,
+    reviewed_at: isoOrNull(mention.reviewedAt),
+    created_at: mention.createdAt.toISOString(),
+    updated_at: mention.updatedAt.toISOString()
+  };
+}
+
+export async function toPublicJob(job: Job, includeDownloadToken = false): Promise<PublicJob> {
   const started = job.processing_started_at ? Date.parse(job.processing_started_at) : Number.NaN;
   const completed = job.processing_completed_at ? Date.parse(job.processing_completed_at) : Number.NaN;
   const processingSeconds = Number.isFinite(started) && Number.isFinite(completed) ? Math.max(0, Math.round((completed - started) / 1000)) : null;
-  const metadata = parseJobMetadata(job.metadata);
-  const instagramMetadata = metadata.instagram && typeof metadata.instagram === "object" ? metadata.instagram as Record<string, unknown> : {};
-  const mosaicMetadata = metadata.mosaic && typeof metadata.mosaic === "object" ? metadata.mosaic as Record<string, unknown> : {};
+  const metadata = parseJsonRecord(job.metadata);
+  const instagramMetadata = objectValue(metadata.instagram) ?? {};
+  const mosaicMetadata = objectValue(metadata.mosaic) ?? {};
+  const assets = await listGeneratedAssets(job.id);
 
   return {
     id: job.id,
@@ -580,7 +813,7 @@ export function toPublicJob(job: Job, includeDownloadToken = false): PublicJob {
     status: job.status,
     progress: job.progress,
     step: job.step,
-    queuePosition: queuePosition(job),
+    queuePosition: await queuePosition(job),
     igPublic: job.ig_public == null ? null : job.ig_public === 1,
     igPostCount: job.ig_post_count,
     downloadedCount: job.downloaded_count,
@@ -592,8 +825,8 @@ export function toPublicJob(job: Job, includeDownloadToken = false): PublicJob {
     updatedAt: job.updated_at,
     errorMessage: job.error_message,
     paid: Boolean(job.paid_at),
-    previewAvailable: Boolean(job.preview_path),
-    squarePreviewAvailable: Boolean(job.square_preview_path),
+    previewAvailable: assets.some((asset) => asset.type === "socialPreview") || Boolean(job.preview_path),
+    squarePreviewAvailable: assets.some((asset) => asset.type === "squarePreview") || Boolean(job.square_preview_path),
     ...(includeDownloadToken ? { downloadToken: job.download_token } : {}),
     processingSeconds,
     oldestImagePostAt: typeof instagramMetadata.oldestImagePostAt === "string" ? instagramMetadata.oldestImagePostAt : null,
@@ -602,7 +835,422 @@ export function toPublicJob(job: Job, includeDownloadToken = false): PublicJob {
     heroHeight: finiteNumber(metadata.heroHeight),
     mosaicWidth: finiteNumber(mosaicMetadata.masterWidth),
     mosaicHeight: finiteNumber(mosaicMetadata.masterHeight),
-    printOrder: toPublicPrintOrder(getLatestPrintOrderForJob(job.id))
+    printOrder: toPublicPrintOrder(await getLatestPrintOrderForJob(job.id)),
+    assets: assets.map((asset) => ({
+      id: asset.id,
+      type: asset.type,
+      contentType: asset.content_type,
+      size: asset.size,
+      width: asset.width,
+      height: asset.height,
+      createdAt: asset.created_at
+    }))
+  };
+}
+
+export async function trackEvent(input: {
+  event: string;
+  jobId?: string | undefined;
+  user?: string | undefined;
+  ip?: string | undefined;
+  metadata?: JsonRecord | undefined;
+}): Promise<void> {
+  await prisma.analyticsEvent.create({
+    data: {
+      jobId: input.jobId ?? null,
+      event: input.event,
+      user: input.user ?? null,
+      ip: input.ip ?? null,
+      metadata: toJson(input.metadata ?? {})
+    }
+  });
+}
+
+export async function logInfo(input: {
+  event: string;
+  message: string;
+  jobId?: string | undefined;
+  user?: string | undefined;
+  metadata?: JsonRecord | undefined;
+}): Promise<void> {
+  await writeLog({ ...input, level: "info" });
+}
+
+export async function logWarn(input: {
+  event: string;
+  message: string;
+  jobId?: string | undefined;
+  user?: string | undefined;
+  metadata?: JsonRecord | undefined;
+}): Promise<void> {
+  await writeLog({ ...input, level: "warn" });
+}
+
+export async function logError(input: {
+  event: string;
+  message: string;
+  jobId?: string | undefined;
+  user?: string | undefined;
+  stack?: string | undefined;
+  metadata?: JsonRecord | undefined;
+}): Promise<void> {
+  await writeLog({ ...input, level: "error" });
+}
+
+export async function assertRateLimit(input: {
+  scope: string;
+  identity: string;
+  limit: number;
+  windowMs: number;
+}): Promise<RateLimitResult> {
+  const nowMs = Date.now();
+  const row = await prisma.rateLimit.findUnique({ where: { scope_identity: { scope: input.scope, identity: input.identity } } });
+  if (!row || nowMs - Number(row.windowStartMs) >= input.windowMs) {
+    await prisma.rateLimit.upsert({
+      where: { scope_identity: { scope: input.scope, identity: input.identity } },
+      create: { scope: input.scope, identity: input.identity, windowStartMs: BigInt(nowMs), count: 1 },
+      update: { windowStartMs: BigInt(nowMs), count: 1 }
+    });
+    return { allowed: true, remaining: Math.max(0, input.limit - 1), retryAfterSeconds: 0 };
+  }
+  const retryAfterSeconds = Math.max(1, Math.ceil((input.windowMs - (nowMs - Number(row.windowStartMs))) / 1000));
+  if (row.count >= input.limit) {
+    return { allowed: false, remaining: 0, retryAfterSeconds };
+  }
+  await prisma.rateLimit.update({
+    where: { scope_identity: { scope: input.scope, identity: input.identity } },
+    data: { count: { increment: 1 } }
+  });
+  return { allowed: true, remaining: Math.max(0, input.limit - row.count - 1), retryAfterSeconds: 0 };
+}
+
+export async function hasActiveJobForIp(ip: string): Promise<boolean> {
+  const count = await prisma.generationJob.count({ where: { ipAddress: ip, status: { in: [GenerationJobStatus.QUEUED, GenerationJobStatus.PROCESSING] } } });
+  return count > 0;
+}
+
+export async function hasActiveJobForEmail(email: string): Promise<boolean> {
+  const count = await prisma.generationJob.count({
+    where: { email: { equals: email, mode: "insensitive" }, status: { in: [GenerationJobStatus.QUEUED, GenerationJobStatus.PROCESSING] } }
+  });
+  return count > 0;
+}
+
+export async function recordDownloadStarted(input: { jobId: string; token: string; outputType: string; ip?: string | undefined }): Promise<number> {
+  const row = await prisma.download.create({
+    data: {
+      jobId: input.jobId,
+      token: input.token,
+      outputType: input.outputType,
+      ip: input.ip ?? null
+    }
+  });
+  await trackEvent({ event: "download_started", jobId: input.jobId, ip: input.ip, metadata: { outputType: input.outputType } });
+  return row.id;
+}
+
+export async function recordDownloadCompleted(downloadId: number, jobId: string, outputType: string, ip?: string | undefined): Promise<void> {
+  await prisma.download.update({ where: { id: downloadId }, data: { completedAt: new Date() } });
+  await trackEvent({ event: "download_completed", jobId, ip, metadata: { outputType } });
+}
+
+export async function getDashboardMetrics(): Promise<Record<string, unknown>> {
+  const [
+    totalJobs,
+    completedJobs,
+    failedJobs,
+    paidJobs,
+    downloads,
+    printOrders,
+    revenue,
+    recentJobs,
+    recentAnalytics,
+    recentErrors,
+    recentPrintOrders,
+    recentMarketingPosts,
+    funnel
+  ] = await Promise.all([
+    prisma.generationJob.count(),
+    prisma.generationJob.count({ where: { status: GenerationJobStatus.COMPLETED } }),
+    prisma.generationJob.count({ where: { status: GenerationJobStatus.FAILED } }),
+    prisma.generationJob.count({ where: { paidAt: { not: null } } }),
+    prisma.download.count({ where: { completedAt: { not: null } } }),
+    prisma.printOrder.count(),
+    prisma.generationJob.aggregate({ where: { paidAt: { not: null } }, _sum: { amountPaidCents: true } }),
+    prisma.generationJob.findMany({ orderBy: { createdAt: "desc" }, take: 20 }),
+    prisma.analyticsEvent.findMany({ orderBy: { createdAt: "desc" }, take: 40 }),
+    prisma.logEntry.findMany({ where: { level: "error" }, orderBy: { createdAt: "desc" }, take: 40 }),
+    prisma.printOrder.findMany({ orderBy: { createdAt: "desc" }, take: 20 }),
+    prisma.marketingPost.findMany({ include: { target: true, job: true }, orderBy: { createdAt: "desc" }, take: 20 }),
+    prisma.analyticsEvent.groupBy({
+      by: ["event"],
+      where: {
+        event: {
+          in: [
+            "landing_page_loaded",
+            "instagram_check_public",
+            "form_completed",
+            "submit_clicked",
+            "job_created",
+            "worker_completed",
+            "checkout_clicked",
+            "stripe_checkout_completed",
+            "download_completed"
+          ]
+        }
+      },
+      _count: { event: true }
+    })
+  ]);
+
+  const averageProcessingSeconds = await averageProcessingSecondsValue();
+
+  return {
+    totalJobs,
+    completedJobs,
+    failedJobs,
+    paidJobs,
+    averageProcessingSeconds,
+    revenueCents: revenue._sum.amountPaidCents ?? 0,
+    downloads,
+    printOrders,
+    conversion: {
+      completedRate: totalJobs ? completedJobs / totalJobs : 0,
+      paidRate: completedJobs ? paidJobs / completedJobs : 0
+    },
+    funnel: funnel.map((row) => ({ event: row.event, count: row._count.event })),
+    recentJobs: recentJobs.map((job) => ({
+      id: job.id,
+      username: job.username,
+      email: job.email,
+      status: prismaStatusToLegacy(job.status),
+      progress: job.progress,
+      step: legacyStepFromStage(job.stage),
+      photos_used: job.photosUsed,
+      paid_at: isoOrNull(job.paidAt),
+      created_at: job.createdAt.toISOString(),
+      updated_at: job.updatedAt.toISOString(),
+      error_message: job.errorMessage
+    })),
+    recentPrintOrders: recentPrintOrders.map(toLegacyPrintOrder),
+    recentMarketingPosts: recentMarketingPosts.map((post) => ({
+      id: post.id,
+      target: post.target?.instagramUsername ?? null,
+      username: post.job?.username ?? null,
+      job_status: post.job ? prismaStatusToLegacy(post.job.status) : null,
+      job_progress: post.job?.progress ?? null,
+      job_step: post.job ? legacyStepFromStage(post.job.stage) : null,
+      download_token: post.job?.downloadToken ?? null,
+      job_id: post.jobId,
+      kind: post.kind,
+      status: post.status,
+      caption: post.caption,
+      best_asset_type: post.bestAssetType,
+      best_asset_path: post.bestAssetPath,
+      reveal_video_path: post.revealVideoPath,
+      planned_for: isoOrNull(post.plannedFor),
+      approved_at: isoOrNull(post.approvedAt),
+      published_at: isoOrNull(post.publishedAt),
+      permalink: post.permalink,
+      publish_notes: post.publishNotes,
+      error_message: post.errorMessage,
+      created_at: post.createdAt.toISOString(),
+      updated_at: post.updatedAt.toISOString()
+    })),
+    recentAnalytics: recentAnalytics.map((row) => ({
+      id: row.id,
+      job_id: row.jobId,
+      event: row.event,
+      user: row.user,
+      ip: row.ip,
+      metadata: JSON.stringify(row.metadata ?? {}),
+      created_at: row.createdAt.toISOString()
+    })),
+    recentErrors: recentErrors.map((row) => ({
+      id: row.id,
+      job_id: row.jobId,
+      level: row.level,
+      event: row.event,
+      user: row.user,
+      message: row.message,
+      stack: row.stack,
+      metadata: JSON.stringify(row.metadata ?? {}),
+      created_at: row.createdAt.toISOString()
+    }))
+  };
+}
+
+export async function resetDbForTests(): Promise<void> {
+  await prisma.$transaction([
+    prisma.instagramMention.deleteMany(),
+    prisma.marketingPost.deleteMany(),
+    prisma.marketingTarget.deleteMany(),
+    prisma.emailDelivery.deleteMany(),
+    prisma.jobDispatch.deleteMany(),
+    prisma.generatedAsset.deleteMany(),
+    prisma.printOrder.deleteMany(),
+    prisma.download.deleteMany(),
+    prisma.analyticsEvent.deleteMany(),
+    prisma.logEntry.deleteMany(),
+    prisma.rateLimit.deleteMany(),
+    prisma.generationJob.deleteMany()
+  ]);
+}
+
+async function writeLog(input: {
+  level: "info" | "warn" | "error";
+  event: string;
+  message: string;
+  jobId?: string | undefined;
+  user?: string | undefined;
+  stack?: string | undefined;
+  metadata?: JsonRecord | undefined;
+}): Promise<void> {
+  await prisma.logEntry.create({
+    data: {
+      jobId: input.jobId ?? null,
+      level: input.level,
+      event: input.event,
+      user: input.user ?? null,
+      message: input.message,
+      stack: input.stack ?? null,
+      metadata: toJson(input.metadata ?? {})
+    }
+  });
+}
+
+async function queuePosition(job: Job): Promise<number | null> {
+  if (job.status !== "queued") return null;
+  return 1 + await prisma.generationJob.count({
+    where: {
+      status: GenerationJobStatus.QUEUED,
+      OR: [
+        { createdAt: { lt: new Date(job.created_at) } },
+        { createdAt: new Date(job.created_at), id: { lt: job.id } }
+      ]
+    }
+  });
+}
+
+async function averageProcessingSecondsValue(): Promise<number> {
+  const rows = await prisma.generationJob.findMany({
+    where: { processingStartedAt: { not: null }, completedAt: { not: null } },
+    select: { processingStartedAt: true, completedAt: true }
+  });
+  if (!rows.length) return 0;
+  const total = rows.reduce((sum, row) => {
+    if (!row.processingStartedAt || !row.completedAt) return sum;
+    return sum + Math.max(0, (row.completedAt.getTime() - row.processingStartedAt.getTime()) / 1000);
+  }, 0);
+  return Math.round(total / rows.length);
+}
+
+function toLegacyJob(job: PrismaGenerationJob): Job {
+  const input = objectValue(job.input) ?? {};
+  const metadata = objectValue(job.metadata) ?? {};
+  return {
+    id: job.id,
+    username: job.username,
+    email: job.email,
+    status: prismaStatusToLegacy(job.status),
+    progress: job.progress,
+    step: legacyStepFromStage(job.stage),
+    ig_public: job.igPublic == null ? null : job.igPublic ? 1 : 0,
+    ig_post_count: job.igPostCount,
+    downloaded_count: job.downloadedCount,
+    skipped_count: job.skippedCount,
+    photos_used: job.photosUsed,
+    processing_started_at: isoOrNull(job.processingStartedAt),
+    processing_completed_at: isoOrNull(job.completedAt),
+    created_at: job.createdAt.toISOString(),
+    updated_at: job.updatedAt.toISOString(),
+    error_message: job.errorMessage,
+    retry_count: job.attemptCount,
+    paid_at: isoOrNull(job.paidAt),
+    amount_paid_cents: job.amountPaidCents,
+    currency: job.currency,
+    stripe_session_id: job.stripeSessionId,
+    hero_path: typeof input.heroPath === "string" ? input.heroPath : "",
+    output_dir: typeof input.outputDir === "string" ? input.outputDir : path.join(storageDir(), "jobs", job.id),
+    preview_path: typeof metadata.previewPath === "string" ? metadata.previewPath : null,
+    square_preview_path: typeof metadata.squarePreviewPath === "string" ? metadata.squarePreviewPath : null,
+    download_token: job.downloadToken,
+    ip_address: job.ipAddress,
+    metadata: JSON.stringify(metadata)
+  };
+}
+
+function toLegacyPrintOrder(order: PrismaPrintOrder): PrintOrder {
+  return {
+    id: order.id,
+    job_id: order.jobId,
+    stripe_session_id: order.stripeSessionId,
+    external_order_number: order.externalOrderNumber,
+    status: order.status,
+    printshrimp_order_id: order.printshrimpOrderId,
+    tracking: order.tracking,
+    tracking_courier: order.trackingCourier,
+    completed: order.completed == null ? null : order.completed ? 1 : 0,
+    request_payload: order.requestPayload == null ? null : JSON.stringify(order.requestPayload),
+    response_payload: order.responsePayload == null ? null : JSON.stringify(order.responsePayload),
+    error_message: order.errorMessage,
+    created_at: order.createdAt.toISOString(),
+    updated_at: order.updatedAt.toISOString()
+  };
+}
+
+function toLegacyMarketingTarget(target: PrismaMarketingTarget): MarketingTarget {
+  return {
+    id: target.id,
+    instagram_username: target.instagramUsername,
+    display_name: target.displayName,
+    category: target.category,
+    priority: target.priority,
+    status: target.status,
+    notes: target.notes,
+    rights_status: target.rightsStatus,
+    rights_notes: target.rightsNotes,
+    created_at: target.createdAt.toISOString(),
+    updated_at: target.updatedAt.toISOString()
+  };
+}
+
+function toLegacyMarketingPost(post: PrismaMarketingPost): MarketingPost {
+  return {
+    id: post.id,
+    target_id: post.targetId,
+    job_id: post.jobId,
+    kind: post.kind,
+    status: post.status,
+    caption: post.caption,
+    best_asset_type: post.bestAssetType,
+    best_asset_path: post.bestAssetPath,
+    reveal_video_path: post.revealVideoPath,
+    planned_for: isoOrNull(post.plannedFor),
+    approved_at: isoOrNull(post.approvedAt),
+    published_at: isoOrNull(post.publishedAt),
+    permalink: post.permalink,
+    publish_notes: post.publishNotes,
+    error_message: post.errorMessage,
+    created_at: post.createdAt.toISOString(),
+    updated_at: post.updatedAt.toISOString()
+  };
+}
+
+function toLegacyAsset(asset: PrismaGeneratedAsset): GeneratedAsset {
+  return {
+    id: asset.id,
+    job_id: asset.jobId,
+    type: asset.type,
+    bucket: asset.bucket,
+    object_key: asset.objectKey,
+    content_type: asset.contentType,
+    size: asset.size,
+    width: asset.width,
+    height: asset.height,
+    checksum: asset.checksum,
+    etag: asset.etag,
+    created_at: asset.createdAt.toISOString()
   };
 }
 
@@ -621,270 +1269,80 @@ function toPublicPrintOrder(order: PrintOrder | null): PublicPrintOrder | null {
   };
 }
 
-function queuePosition(job: Job): number | null {
-  if (job.status !== "queued") return null;
-  const value = getDb()
-    .prepare(
-      `SELECT COUNT(*) + 1 AS position
-       FROM jobs
-       WHERE status = 'queued'
-         AND (created_at < @createdAt OR (created_at = @createdAt AND id < @id))`
-    )
-    .get({ createdAt: job.created_at, id: job.id }) as { position?: number } | undefined;
-  return typeof value?.position === "number" ? value.position : null;
+function prismaStatusToLegacy(status: GenerationJobStatus): JobStatus {
+  if (status === GenerationJobStatus.COMPLETED) return "completed";
+  if (status === GenerationJobStatus.FAILED || status === GenerationJobStatus.CANCELLED) return "failed";
+  if (status === GenerationJobStatus.PROCESSING) return "processing";
+  return "queued";
 }
 
-function parseJobMetadata(metadata: string | null): Record<string, unknown> {
-  if (!metadata) return {};
-  try {
-    const parsed = JSON.parse(metadata);
-    return parsed && typeof parsed === "object" ? parsed as Record<string, unknown> : {};
-  } catch {
-    return {};
+function legacyStatusToPrisma(status: JobStatus): GenerationJobStatus {
+  if (status === "completed") return GenerationJobStatus.COMPLETED;
+  if (status === "failed") return GenerationJobStatus.FAILED;
+  if (status === "processing") return GenerationJobStatus.PROCESSING;
+  return GenerationJobStatus.QUEUED;
+}
+
+function stageFromLegacyStep(step: string): string {
+  if (step === "Job created") return "QUEUED";
+  if (step === "Instagram verified") return "PREPARING_IMAGES";
+  if (step === "Downloading photos") return "DOWNLOADING_INPUTS";
+  if (step === "Generating tiles") return "PREPARING_IMAGES";
+  if (step === "Building mosaic") return "GENERATING_MASTER";
+  if (step === "Generating exports") return "GENERATING_VARIANTS";
+  if (step === "Done") return "COMPLETED";
+  if (step === "Failed") return "FAILED";
+  return step.toUpperCase().replace(/[^A-Z0-9]+/g, "_");
+}
+
+function legacyStepFromStage(stage: string): string {
+  if (stage === "QUEUED") return "Job created";
+  if (stage === "DOWNLOADING_INPUTS") return "Downloading photos";
+  if (stage === "PREPARING_IMAGES") return "Generating tiles";
+  if (stage === "GENERATING_MASTER") return "Building mosaic";
+  if (stage === "GENERATING_VARIANTS") return "Generating exports";
+  if (stage === "UPLOADING_OUTPUTS") return "Generating exports";
+  if (stage === "FINALIZING") return "Generating exports";
+  if (stage === "COMPLETED") return "Done";
+  if (stage === "FAILED") return "Failed";
+  return stage;
+}
+
+function parseJsonRecord(value: string | null | Prisma.JsonValue): JsonRecord {
+  if (!value) return {};
+  if (typeof value === "string") {
+    try {
+      const parsed = JSON.parse(value);
+      return objectValue(parsed) ?? {};
+    } catch {
+      return {};
+    }
   }
+  return objectValue(value) ?? {};
+}
+
+function objectValue(value: unknown): JsonRecord | null {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as JsonRecord : null;
+}
+
+function toJson(value: unknown): Prisma.InputJsonValue {
+  return (value ?? {}) as Prisma.InputJsonValue;
+}
+
+function dateOrNull(value: string | null | undefined): Date | null {
+  if (!value) return null;
+  const date = new Date(value);
+  return Number.isFinite(date.getTime()) ? date : null;
+}
+
+function isoOrNull(value: Date | null): string | null {
+  return value ? value.toISOString() : null;
 }
 
 function finiteNumber(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
-export function trackEvent(input: {
-  event: string;
-  jobId?: string | undefined;
-  user?: string | undefined;
-  ip?: string | undefined;
-  metadata?: Record<string, unknown> | undefined;
-}): void {
-  getDb()
-    .prepare(
-      `INSERT INTO analytics_events (job_id, event, user, ip, metadata, created_at)
-       VALUES (@jobId, @event, @user, @ip, @metadata, @createdAt)`
-    )
-    .run({
-      jobId: input.jobId ?? null,
-      event: input.event,
-      user: input.user ?? null,
-      ip: input.ip ?? null,
-      metadata: JSON.stringify(input.metadata ?? {}),
-      createdAt: nowIso()
-    });
-}
-
-export function logInfo(input: {
-  event: string;
-  message: string;
-  jobId?: string | undefined;
-  user?: string | undefined;
-  metadata?: Record<string, unknown> | undefined;
-}): void {
-  writeLog({ ...input, level: "info" });
-}
-
-export function logWarn(input: {
-  event: string;
-  message: string;
-  jobId?: string | undefined;
-  user?: string | undefined;
-  metadata?: Record<string, unknown> | undefined;
-}): void {
-  writeLog({ ...input, level: "warn" });
-}
-
-export function logError(input: {
-  event: string;
-  message: string;
-  jobId?: string | undefined;
-  user?: string | undefined;
-  stack?: string | undefined;
-  metadata?: Record<string, unknown> | undefined;
-}): void {
-  writeLog({ ...input, level: "error" });
-}
-
-function writeLog(input: {
-  level: "info" | "warn" | "error";
-  event: string;
-  message: string;
-  jobId?: string | undefined;
-  user?: string | undefined;
-  stack?: string | undefined;
-  metadata?: Record<string, unknown> | undefined;
-}): void {
-  getDb()
-    .prepare(
-      `INSERT INTO logs (job_id, level, event, user, message, stack, metadata, created_at)
-       VALUES (@jobId, @level, @event, @user, @message, @stack, @metadata, @createdAt)`
-    )
-    .run({
-      jobId: input.jobId ?? null,
-      level: input.level,
-      event: input.event,
-      user: input.user ?? null,
-      message: input.message,
-      stack: input.stack ?? null,
-      metadata: JSON.stringify(input.metadata ?? {}),
-      createdAt: nowIso()
-    });
-}
-
-export function assertRateLimit(input: {
-  scope: string;
-  identity: string;
-  limit: number;
-  windowMs: number;
-}): RateLimitResult {
-  const database = getDb();
-  const nowMs = Date.now();
-  const row = database
-    .prepare("SELECT * FROM rate_limits WHERE scope = ? AND identity = ?")
-    .get(input.scope, input.identity) as { window_start_ms: number; count: number } | undefined;
-
-  if (!row || nowMs - row.window_start_ms >= input.windowMs) {
-    database
-      .prepare("INSERT OR REPLACE INTO rate_limits (scope, identity, window_start_ms, count) VALUES (?, ?, ?, 1)")
-      .run(input.scope, input.identity, nowMs);
-    return { allowed: true, remaining: Math.max(0, input.limit - 1), retryAfterSeconds: 0 };
-  }
-
-  const retryAfterSeconds = Math.max(1, Math.ceil((input.windowMs - (nowMs - row.window_start_ms)) / 1000));
-  if (row.count >= input.limit) {
-    return { allowed: false, remaining: 0, retryAfterSeconds };
-  }
-
-  database
-    .prepare("UPDATE rate_limits SET count = count + 1 WHERE scope = ? AND identity = ?")
-    .run(input.scope, input.identity);
-  return { allowed: true, remaining: Math.max(0, input.limit - row.count - 1), retryAfterSeconds: 0 };
-}
-
-export function hasActiveJobForIp(ip: string): boolean {
-  const row = getDb()
-    .prepare("SELECT id FROM jobs WHERE ip_address = ? AND status IN ('queued', 'processing') LIMIT 1")
-    .get(ip);
-  return Boolean(row);
-}
-
-export function hasActiveJobForEmail(email: string): boolean {
-  const row = getDb()
-    .prepare("SELECT id FROM jobs WHERE lower(email) = lower(?) AND status IN ('queued', 'processing') LIMIT 1")
-    .get(email);
-  return Boolean(row);
-}
-
-export function recordDownloadStarted(input: { jobId: string; token: string; outputType: string; ip?: string | undefined }): number {
-  const result = getDb()
-    .prepare(
-      `INSERT INTO downloads (job_id, token, output_type, ip, started_at)
-       VALUES (@jobId, @token, @outputType, @ip, @startedAt)`
-    )
-    .run({
-      jobId: input.jobId,
-      token: input.token,
-      outputType: input.outputType,
-      ip: input.ip ?? null,
-      startedAt: nowIso()
-    });
-  trackEvent({ event: "download_started", jobId: input.jobId, ip: input.ip, metadata: { outputType: input.outputType } });
-  return Number(result.lastInsertRowid);
-}
-
-export function recordDownloadCompleted(downloadId: number, jobId: string, outputType: string, ip?: string | undefined): void {
-  getDb().prepare("UPDATE downloads SET completed_at = ? WHERE id = ?").run(nowIso(), downloadId);
-  trackEvent({ event: "download_completed", jobId, ip, metadata: { outputType } });
-}
-
-export function getDashboardMetrics(): Record<string, unknown> {
-  const database = getDb();
-  const scalar = <T>(sql: string, params: unknown[] = []): T => {
-    const row = database.prepare(sql).get(...params) as Record<string, T> | undefined;
-    return row ? (Object.values(row)[0] as T) : (0 as T);
-  };
-
-  const totalJobs = scalar<number>("SELECT COUNT(*) AS value FROM jobs");
-  const completedJobs = scalar<number>("SELECT COUNT(*) AS value FROM jobs WHERE status = 'completed'");
-  const failedJobs = scalar<number>("SELECT COUNT(*) AS value FROM jobs WHERE status = 'failed'");
-  const paidJobs = scalar<number>("SELECT COUNT(*) AS value FROM jobs WHERE paid_at IS NOT NULL");
-  const downloads = scalar<number>("SELECT COUNT(*) AS value FROM downloads WHERE completed_at IS NOT NULL");
-  const printOrders = scalar<number>("SELECT COUNT(*) AS value FROM print_orders");
-  const revenueCents = scalar<number>("SELECT COALESCE(SUM(amount_paid_cents), 0) AS value FROM jobs WHERE paid_at IS NOT NULL");
-  const averageProcessingSeconds = scalar<number>(
-    `SELECT COALESCE(AVG((julianday(processing_completed_at) - julianday(processing_started_at)) * 86400), 0) AS value
-     FROM jobs
-     WHERE processing_started_at IS NOT NULL AND processing_completed_at IS NOT NULL`
-  );
-
-  const recentJobs = database
-    .prepare(
-      `SELECT id, username, email, status, progress, step, photos_used, paid_at, created_at, updated_at, error_message
-       FROM jobs
-       ORDER BY created_at DESC
-       LIMIT 20`
-    )
-    .all();
-
-  const recentAnalytics = database
-    .prepare(
-      `SELECT id, job_id, event, user, ip, metadata, created_at
-       FROM analytics_events
-       ORDER BY created_at DESC
-       LIMIT 40`
-    )
-    .all();
-
-  const recentErrors = database
-    .prepare(
-      `SELECT id, job_id, level, event, user, message, stack, metadata, created_at
-       FROM logs
-       WHERE level = 'error'
-       ORDER BY created_at DESC
-       LIMIT 40`
-    )
-    .all();
-
-  const recentPrintOrders = database
-    .prepare(
-      `SELECT id, job_id, status, external_order_number, printshrimp_order_id, tracking, tracking_courier, completed, error_message, created_at, updated_at
-       FROM print_orders
-       ORDER BY created_at DESC
-       LIMIT 20`
-    )
-    .all();
-
-  const funnel = database
-    .prepare(
-      `SELECT event, COUNT(*) AS count
-       FROM analytics_events
-       WHERE event IN (
-         'landing_page_loaded', 'instagram_check_public', 'form_completed', 'submit_clicked',
-         'job_created', 'worker_completed', 'checkout_clicked', 'stripe_checkout_completed',
-         'download_completed'
-       )
-       GROUP BY event`
-    )
-    .all();
-
-  return {
-    totalJobs,
-    completedJobs,
-    failedJobs,
-    paidJobs,
-    averageProcessingSeconds: Math.round(averageProcessingSeconds),
-    revenueCents,
-    downloads,
-    printOrders,
-    conversion: {
-      completedRate: totalJobs ? completedJobs / totalJobs : 0,
-      paidRate: completedJobs ? paidJobs / completedJobs : 0
-    },
-    funnel,
-    recentJobs,
-    recentPrintOrders,
-    recentAnalytics,
-    recentErrors
-  };
-}
-
-export function resetDbForTests(): void {
-  const database = getDb();
-  database.exec("DELETE FROM print_orders; DELETE FROM downloads; DELETE FROM analytics_events; DELETE FROM logs; DELETE FROM rate_limits; DELETE FROM jobs;");
+function isUniqueConstraintError(error: unknown): boolean {
+  return error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002";
 }

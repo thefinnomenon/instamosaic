@@ -1,4 +1,4 @@
-import type { APIEvent } from "@solidjs/start/server";
+type APIEvent = { request: Request; params: Record<string, string | undefined> };
 import { getPrintOrder, trackEvent } from "@instamosaic/db";
 import { syncPrintShrimpOrder } from "../../../../../lib/printshrimp.ts";
 import { errorJson, getClientIp, json } from "../../../../../lib/server.ts";
@@ -13,7 +13,7 @@ export async function POST({ params, request }: APIEvent): Promise<Response> {
   const id = Number(params.id);
   if (!Number.isInteger(id) || id <= 0) return errorJson("Invalid print order id.", 400);
 
-  const order = getPrintOrder(id);
+  const order = await getPrintOrder(id);
   if (!order) return errorJson("Print order not found.", 404);
 
   const result = await syncPrintShrimpOrder({
@@ -22,6 +22,6 @@ export async function POST({ params, request }: APIEvent): Promise<Response> {
     printshrimpOrderId: order.printshrimp_order_id
   });
 
-  trackEvent({ event: "printshrimp_order_synced", jobId: order.job_id, ip: getClientIp(request), metadata: { printOrderId: id } });
+  await trackEvent({ event: "printshrimp_order_synced", jobId: order.job_id, ip: getClientIp(request), metadata: { printOrderId: id } });
   return json({ result });
 }

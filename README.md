@@ -62,7 +62,9 @@ npm run test:reveal
 advances to the next target, generates its mosaic and reveal video locally,
 publishes a two-item carousel (reveal first, mosaic second) with an
 `@username` caption mention, and publishes the reveal separately to Stories.
-The reveal video visibly includes the target handle.
+The Story includes an API-level mention positioned near the top center using
+the target's numeric Instagram user ID, and the reveal video visibly includes
+the target handle.
 
 Check the next target without generating or publishing:
 

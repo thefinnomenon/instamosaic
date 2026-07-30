@@ -16,7 +16,10 @@ export type InstagramPublisher = {
     mosaicImageUrl: string;
     caption: string;
   }): Promise<PublishedInstagramMedia>;
-  publishStory(input: { videoUrl: string }): Promise<PublishedInstagramMedia>;
+  publishStory(input: {
+    videoUrl: string;
+    mentionUserId: string;
+  }): Promise<PublishedInstagramMedia>;
 };
 
 export function instagramPublisherFromEnv(): InstagramPublisher {
@@ -68,13 +71,24 @@ export function instagramPublisherFromEnv(): InstagramPublisher {
         apiVersion,
         params: {
           media_type: "STORIES",
-          video_url: input.videoUrl
+          video_url: input.videoUrl,
+          user_tags: storyMentionTags(input.mentionUserId)
         }
       });
       await waitForContainer({ containerId: storyId, accessToken, apiVersion });
       return publishContainer({ userId, containerId: storyId, accessToken, apiVersion });
     }
   };
+}
+
+export function storyMentionTags(userId: string): string {
+  const normalized = userId.trim();
+  if (!/^\d+$/.test(normalized)) throw new Error("Instagram Story mention user ID must be numeric.");
+  return JSON.stringify([{
+    user_id: normalized,
+    x: 0.5,
+    y: 0.13
+  }]);
 }
 
 async function createMediaContainer(input: {

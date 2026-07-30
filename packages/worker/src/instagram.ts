@@ -21,6 +21,7 @@ export type InstagramCheckResult = {
 };
 
 export type DownloadTilesResult = {
+  user_id: string | null;
   downloaded_count: number;
   skipped_count: number;
   tile_paths: string[];
@@ -112,6 +113,7 @@ export async function downloadInstagramTiles(input: {
   const errors: string[] = [];
   const mediaItems: MediaItem[] = [];
   const seenUrls = new Set<string>();
+  let userId: string | null = null;
   let maxId = "";
   let pagesChecked = 0;
 
@@ -121,6 +123,7 @@ export async function downloadInstagramTiles(input: {
     pagesChecked += 1;
     input.onProgress?.({ stage: "Finding photos", progress: Math.min(0.12, pagesChecked * 0.02), total_count: mediaItems.length });
     const payload = await rapidApiPost("posts", { username, maxId });
+    userId ??= instagramUserIdFromPostsPayload(payload, username);
     const pageItems = mediaItemsFromPostsPayload(payload);
     if (pageItems.length === 0) warnings.push("RapidAPI returned no image media on this page.");
 
@@ -174,6 +177,7 @@ export async function downloadInstagramTiles(input: {
 
   input.onProgress?.({ stage: "Preparing photos", progress: 0.98, downloaded_count: tilePaths.length, total_count: mediaItems.length });
   return {
+    user_id: userId,
     downloaded_count: tilePaths.length,
     skipped_count: skippedCount,
     tile_paths: tilePaths,
@@ -388,6 +392,16 @@ function bestProfilePhotoUrl(profile: JsonObject): string | null {
   return typeof best?.url === "string" ? best.url : null;
 }
 
+function instagramUserId(profile: JsonObject): string | null {
+  for (const field of ["id", "pk", "user_id", "instagram_id"]) {
+    const value = profile[field];
+    if ((typeof value === "string" || typeof value === "number") && String(value).trim()) {
+      return String(value);
+    }
+  }
+  return null;
+}
+
 function heroCandidatesFromPostsPayload(payload: JsonObject, source: "top_liked" | "recent"): HeroCandidate[] {
   const result = objectValue(payload.result);
   const edges = arrayValue(result?.edges);
@@ -425,6 +439,21 @@ function nextCursorFromPostsPayload(payload: JsonObject): string | null {
   const pageInfo = objectValue(objectValue(payload.result)?.page_info);
   if (!pageInfo?.has_next_page) return null;
   return typeof pageInfo.end_cursor === "string" && pageInfo.end_cursor ? pageInfo.end_cursor : null;
+}
+
+function instagramUserIdFromPostsPayload(payload: JsonObject, username: string): string | null {
+  const edges = arrayValue(objectValue(payload.result)?.edges);
+  for (const edge of edges) {
+    const node = objectValue(objectValue(edge)?.node);
+    if (!node) continue;
+    for (const field of ["user", "owner"]) {
+      const account = objectValue(node[field]);
+      if (!account || String(account.username || "").toLowerCase() !== username.toLowerCase()) continue;
+      const userId = instagramUserId(account);
+      if (userId) return userId;
+    }
+  }
+  return null;
 }
 
 function bestMediaUrl(item: JsonObject): string | null {
@@ -549,6 +578,7 @@ export async function mockDownloadInstagramTiles(input: {
   }
   input.onProgress?.({ stage: "Preparing photos", progress: 1, downloaded_count: tilePaths.length, total_count: count });
   return {
+    user_id: null,
     downloaded_count: tilePaths.length,
     skipped_count: 0,
     tile_paths: tilePaths,

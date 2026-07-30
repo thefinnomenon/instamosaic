@@ -71,7 +71,10 @@ try {
         });
         try {
           console.log(`Publishing reveal Story for @${username}...`);
-          const story = await publisher.publishStory({ videoUrl: revealVideoUrl });
+          const story = await publisher.publishStory({
+            videoUrl: revealVideoUrl,
+            mentionUserId: assets.targetUserId
+          });
           storyId = story.id;
         } catch (error) {
           console.error(`Story failed after the carousel was published: ${errorMessage(error)}`);
@@ -111,6 +114,7 @@ async function generateCampaignAssets(username: string): Promise<{
   outputDir: string;
   revealVideoPath: string;
   mosaicImagePath: string;
+  targetUserId: string;
 }> {
   const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
   const outputDir = path.join(outputRoot, `${timestamp}-${username}`);
@@ -142,6 +146,9 @@ async function generateCampaignAssets(username: string): Promise<{
   if (download.downloaded_count === 0) {
     throw new Error(download.errors[0] || `No usable Instagram photos were found for @${username}.`);
   }
+  if (!download.user_id) {
+    throw new Error(`Instagram posts did not include a user ID for @${username}; Story mention was not published.`);
+  }
 
   console.log(`Generating mosaic from ${download.downloaded_count} photos...`);
   const mosaic = await generateMosaic({
@@ -169,7 +176,8 @@ async function generateCampaignAssets(username: string): Promise<{
   return {
     outputDir,
     revealVideoPath,
-    mosaicImagePath: mosaic.outputs.revealPreview.path
+    mosaicImagePath: mosaic.outputs.revealPreview.path,
+    targetUserId: download.user_id
   };
 }
 

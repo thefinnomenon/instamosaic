@@ -1,5 +1,5 @@
 const DEFAULT_GRAPH_API_VERSION = "v25.0";
-const GRAPH_API_ORIGIN = "https://graph.instagram.com";
+const GRAPH_API_ORIGIN = "https://graph.facebook.com";
 const CONTAINER_TIMEOUT_MS = 5 * 60_000;
 const POLL_INTERVAL_MS = 5_000;
 
@@ -18,13 +18,13 @@ export type InstagramPublisher = {
   }): Promise<PublishedInstagramMedia>;
   publishStory(input: {
     videoUrl: string;
-    mentionUserId: string;
+    mentionUsername: string;
   }): Promise<PublishedInstagramMedia>;
 };
 
 export function instagramPublisherFromEnv(): InstagramPublisher {
-  const userId = requiredEnv("INSTAGRAM_USER_ID");
-  const accessToken = requiredEnv("INSTAGRAM_ACCESS_TOKEN");
+  const userId = requiredEnv("INSTAGRAM_BUSINESS_ACCOUNT_ID");
+  const accessToken = requiredEnv("INSTAGRAM_PAGE_ACCESS_TOKEN");
   const apiVersion = process.env.INSTAGRAM_GRAPH_API_VERSION?.trim() || DEFAULT_GRAPH_API_VERSION;
 
   return {
@@ -72,7 +72,7 @@ export function instagramPublisherFromEnv(): InstagramPublisher {
         params: {
           media_type: "STORIES",
           video_url: input.videoUrl,
-          user_tags: storyMentionTags(input.mentionUserId)
+          user_tags: storyMentionTags(input.mentionUsername)
         }
       });
       await waitForContainer({ containerId: storyId, accessToken, apiVersion });
@@ -81,11 +81,11 @@ export function instagramPublisherFromEnv(): InstagramPublisher {
   };
 }
 
-export function storyMentionTags(userId: string): string {
-  const normalized = userId.trim();
-  if (!/^\d+$/.test(normalized)) throw new Error("Instagram Story mention user ID must be numeric.");
+export function storyMentionTags(username: string): string {
+  const normalized = username.trim().replace(/^@+/, "").toLowerCase();
+  if (!/^[a-z0-9._]{1,30}$/.test(normalized)) throw new Error("Instagram Story mention username is invalid.");
   return JSON.stringify([{
-    user_id: normalized,
+    username: normalized,
     x: 0.5,
     y: 0.13
   }]);

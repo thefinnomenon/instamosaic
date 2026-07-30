@@ -22,6 +22,17 @@ const outputRoot = resolveFromRepository(process.env.INSTAGRAM_CAMPAIGN_OUTPUT_D
 const lockFile = `${stateFile}.lock`;
 const dryRun = process.argv.includes("--dry-run");
 const generateOnly = process.argv.includes("--generate-only");
+const publishOnlyIndex = process.argv.indexOf("--publish-only");
+const publishOnlyDir = publishOnlyIndex === -1 ? null : process.argv[publishOnlyIndex + 1];
+if (publishOnlyIndex !== -1 && !publishOnlyDir) {
+  throw new Error("Usage: npm run campaign:run -- --publish-only <media-directory>");
+}
+const storyOnlyIndex = process.argv.indexOf("--story-only");
+const storyOnlyDir = storyOnlyIndex === -1 ? null : process.argv[storyOnlyIndex + 1];
+const storyOnlyUsername = storyOnlyIndex === -1 ? null : process.argv[storyOnlyIndex + 2];
+if (storyOnlyIndex !== -1 && (!storyOnlyDir || !storyOnlyUsername)) {
+  throw new Error("Usage: npm run campaign:run -- --story-only <media-directory> <username>");
+}
 
 type CampaignState = {
   nextIndex: number;
@@ -39,7 +50,9 @@ const lock = await acquireLock();
 try {
   const targets = await readTargets();
   const state = await readState();
-  const username = targets[state.nextIndex % targets.length];
+  const username = storyOnlyUsername
+    ? sanitizeUsername(storyOnlyUsername)
+    : targets[state.nextIndex % targets.length];
   if (!username) throw new Error("No campaign target was selected.");
 
   console.log(`Next InstaMosaic campaign target: @${username}`);
@@ -47,62 +60,86 @@ try {
     console.log("Dry run complete. No mosaic was generated and nothing was published.");
   } else {
     assertCampaignEnvironment();
-    const assets = await generateCampaignAssets(username);
-    if (generateOnly) {
-      console.log("Generation-only run complete. Nothing was published.");
-      console.log(`Local assets: ${assets.outputDir}`);
-    } else {
-      console.log(`Publishing reveal + mosaic carousel for @${username}...`);
+    if (storyOnlyDir) {
+      const assets = await loadExistingCampaignAssets(storyOnlyDir);
+      console.log(`Publishing reveal Story with @${username} mention...`);
       const publisher = instagramPublisherFromEnv();
       const mediaServer = await startMediaServer({
         revealVideoPath: assets.revealVideoPath,
         mosaicImagePath: assets.mosaicImagePath
       });
       const tunnel = await startTunnel(mediaServer.port);
-      const revealVideoUrl = `${tunnel.url}/reveal.mp4`;
-      const mosaicImageUrl = `${tunnel.url}/mosaic.jpg`;
-      let carousel;
-      let storyId: string | null = null;
       try {
-        carousel = await publisher.publishCarousel({
-          revealVideoUrl,
-          mosaicImageUrl,
-          caption: campaignCaption(username)
+        const story = await publisher.publishStory({
+          videoUrl: `${tunnel.url}/reveal.mp4`,
+          mentionUsername: username
         });
-        try {
-          console.log(`Publishing reveal Story for @${username}...`);
-          const story = await publisher.publishStory({
-            videoUrl: revealVideoUrl,
-            mentionUserId: assets.targetUserId
-          });
-          storyId = story.id;
-        } catch (error) {
-          console.error(`Story failed after the carousel was published: ${errorMessage(error)}`);
-        }
-
-        await writeState({
-          nextIndex: (state.nextIndex + 1) % targets.length,
-          published: [
-            ...state.published,
-            {
-              username,
-              carouselId: carousel.id,
-              carouselPermalink: carousel.permalink,
-              storyId,
-              outputDir: path.relative(repositoryRoot, assets.outputDir),
-              publishedAt: new Date().toISOString()
-            }
-          ].slice(-200)
-        });
+        console.log(`Story published successfully: ${story.id}`);
       } finally {
         tunnel.process.kill();
         await new Promise<void>((resolve) => mediaServer.server.close(() => resolve()));
       }
-
-      console.log(`Campaign run complete for @${username}.`);
-      if (carousel.permalink) console.log(`Post: ${carousel.permalink}`);
-      if (!storyId) console.log("The carousel published, but its Story did not.");
       console.log(`Local assets: ${assets.outputDir}`);
+    } else {
+      const assets = publishOnlyDir
+        ? await loadExistingCampaignAssets(publishOnlyDir)
+        : await generateCampaignAssets(username);
+      if (generateOnly) {
+        console.log("Generation-only run complete. Nothing was published.");
+        console.log(`Local assets: ${assets.outputDir}`);
+      } else {
+        console.log(`Publishing reveal + mosaic carousel for @${username}...`);
+        const publisher = instagramPublisherFromEnv();
+        const mediaServer = await startMediaServer({
+          revealVideoPath: assets.revealVideoPath,
+          mosaicImagePath: assets.mosaicImagePath
+        });
+        const tunnel = await startTunnel(mediaServer.port);
+        const revealVideoUrl = `${tunnel.url}/reveal.mp4`;
+        const mosaicImageUrl = `${tunnel.url}/mosaic.jpg`;
+        let carousel;
+        let storyId: string | null = null;
+        try {
+          carousel = await publisher.publishCarousel({
+            revealVideoUrl,
+            mosaicImageUrl,
+            caption: campaignCaption(username)
+          });
+          try {
+            console.log(`Publishing reveal Story for @${username}...`);
+            const story = await publisher.publishStory({
+              videoUrl: revealVideoUrl,
+              mentionUsername: username
+            });
+            storyId = story.id;
+          } catch (error) {
+            console.error(`Story failed after the carousel was published: ${errorMessage(error)}`);
+          }
+
+          await writeState({
+            nextIndex: (state.nextIndex + 1) % targets.length,
+            published: [
+              ...state.published,
+              {
+                username,
+                carouselId: carousel.id,
+                carouselPermalink: carousel.permalink,
+                storyId,
+                outputDir: path.relative(repositoryRoot, assets.outputDir),
+                publishedAt: new Date().toISOString()
+              }
+            ].slice(-200)
+          });
+        } finally {
+          tunnel.process.kill();
+          await new Promise<void>((resolve) => mediaServer.server.close(() => resolve()));
+        }
+
+        console.log(`Campaign run complete for @${username}.`);
+        if (carousel.permalink) console.log(`Post: ${carousel.permalink}`);
+        if (!storyId) console.log("The carousel published, but its Story did not.");
+        console.log(`Local assets: ${assets.outputDir}`);
+      }
     }
   }
 } finally {
@@ -114,7 +151,6 @@ async function generateCampaignAssets(username: string): Promise<{
   outputDir: string;
   revealVideoPath: string;
   mosaicImagePath: string;
-  targetUserId: string;
 }> {
   const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
   const outputDir = path.join(outputRoot, `${timestamp}-${username}`);
@@ -146,10 +182,6 @@ async function generateCampaignAssets(username: string): Promise<{
   if (download.downloaded_count === 0) {
     throw new Error(download.errors[0] || `No usable Instagram photos were found for @${username}.`);
   }
-  if (!download.user_id) {
-    throw new Error(`Instagram posts did not include a user ID for @${username}; Story mention was not published.`);
-  }
-
   console.log(`Generating mosaic from ${download.downloaded_count} photos...`);
   const mosaic = await generateMosaic({
     heroPath: hero.hero_path,
@@ -176,9 +208,27 @@ async function generateCampaignAssets(username: string): Promise<{
   return {
     outputDir,
     revealVideoPath,
-    mosaicImagePath: mosaic.outputs.revealPreview.path,
-    targetUserId: download.user_id
+    mosaicImagePath: mosaic.outputs.revealPreview.path
   };
+}
+
+async function loadExistingCampaignAssets(
+  directory: string
+): Promise<{
+  outputDir: string;
+  revealVideoPath: string;
+  mosaicImagePath: string;
+}> {
+  const outputDir = resolveFromRepository(directory);
+  const revealVideoPath = path.join(outputDir, revealVideoFilename);
+  const mosaicImagePath = path.join(outputDir, "reveal-1080x1920.jpg");
+  await Promise.all([
+    readFile(revealVideoPath),
+    readFile(mosaicImagePath)
+  ]).catch(() => {
+    throw new Error(`Publish-only media package is incomplete: ${outputDir}`);
+  });
+  return { outputDir, revealVideoPath, mosaicImagePath };
 }
 
 async function readTargets(): Promise<string[]> {
@@ -243,8 +293,8 @@ function campaignCaption(username: string): string {
 function assertCampaignEnvironment(): void {
   const required = [
     "INSTAGRAM_RAPIDAPI_KEY",
-    "INSTAGRAM_USER_ID",
-    "INSTAGRAM_ACCESS_TOKEN"
+    "INSTAGRAM_PAGE_ACCESS_TOKEN",
+    "INSTAGRAM_BUSINESS_ACCOUNT_ID"
   ];
   const missing = required.filter((name) => !process.env[name]?.trim());
   if (missing.length) throw new Error(`Missing campaign environment variables: ${missing.join(", ")}`);
@@ -286,47 +336,113 @@ async function startMediaServer(input: {
 }
 
 async function startTunnel(port: number): Promise<{ process: ChildProcess; url: string }> {
-  const process = spawn("ssh", [
-    "-o", "StrictHostKeyChecking=accept-new",
-    "-o", "ServerAliveInterval=30",
-    "-R", `80:127.0.0.1:${port}`,
-    "nokey@localhost.run"
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      return await startTunnelAttempt(port);
+    } catch (error) {
+      lastError = error;
+      console.error(`Campaign media tunnel attempt ${attempt}/3 failed: ${errorMessage(error)}`);
+    }
+  }
+  throw lastError;
+}
+
+async function startTunnelAttempt(port: number): Promise<{ process: ChildProcess; url: string }> {
+  const cloudflaredPath = process.env.CLOUDFLARED_PATH?.trim() || "/opt/homebrew/bin/cloudflared";
+  const tunnelProcess = spawn(cloudflaredPath, [
+    "tunnel",
+    "--url", `http://127.0.0.1:${port}`,
+    "--no-autoupdate",
+    "--protocol", "http2"
   ], { stdio: ["ignore", "pipe", "pipe"] });
 
-  const url = await new Promise<string>((resolve, reject) => {
-    const timeout = setTimeout(() => reject(new Error("Campaign media tunnel did not start.")), 60_000);
-    const inspectOutput = (chunk: Buffer) => {
-      const publicUrl = chunk.toString("utf8").match(/https:\/\/[a-z0-9-]+\.lhr\.life/)?.[0];
-      if (!publicUrl) return;
-      clearTimeout(timeout);
-      resolve(publicUrl);
-    };
-    process.once("error", reject);
-    process.once("exit", (code) => reject(new Error(`Campaign media tunnel exited with code ${String(code)}.`)));
-    process.stdout?.on("data", inspectOutput);
-    process.stderr?.on("data", inspectOutput);
-  });
+  try {
+    const url = await new Promise<string>((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error("Campaign media tunnel did not start.")), 60_000);
+      const inspectOutput = (chunk: Buffer) => {
+        const publicUrl = chunk.toString("utf8").match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com/)?.[0];
+        if (!publicUrl) return;
+        clearTimeout(timeout);
+        resolve(publicUrl);
+      };
+      tunnelProcess.once("error", reject);
+      tunnelProcess.once("exit", (code) => reject(new Error(`Campaign media tunnel exited with code ${String(code)}.`)));
+      tunnelProcess.stdout?.on("data", inspectOutput);
+      tunnelProcess.stderr?.on("data", inspectOutput);
+    });
 
-  await Promise.all([
-    waitForPublicMedia(`${url}/reveal.mp4`),
-    waitForPublicMedia(`${url}/mosaic.jpg`)
-  ]);
-  return { process, url };
+    await Promise.all([
+      waitForPublicMedia(`${url}/reveal.mp4`),
+      waitForPublicMedia(`${url}/mosaic.jpg`)
+    ]);
+    return { process: tunnelProcess, url };
+  } catch (error) {
+    tunnelProcess.kill();
+    throw error;
+  }
 }
 
 async function waitForPublicMedia(url: string): Promise<void> {
   let lastStatus = "unreachable";
-  for (let attempt = 0; attempt < 90; attempt += 1) {
+  const hostname = new URL(url).hostname;
+  for (let attempt = 0; attempt < 30; attempt += 1) {
     try {
-      const response = await fetch(url, { method: "HEAD", signal: AbortSignal.timeout(10_000) });
-      if (response.ok) return;
-      lastStatus = `HTTP ${response.status}`;
+      const publicIp = await resolveWithCloudflareDns(hostname);
+      if (!publicIp) throw new Error("hostname is not in public DNS yet");
+      const status = await curlHeadStatus(url, hostname, publicIp);
+      if (status >= 200 && status < 400) return;
+      lastStatus = `HTTP ${status}`;
     } catch (error) {
       lastStatus = errorMessage(error);
     }
     await new Promise((resolve) => setTimeout(resolve, 1_000));
   }
   throw new Error(`Campaign media tunnel did not serve ${url}: ${lastStatus}`);
+}
+
+async function resolveWithCloudflareDns(hostname: string): Promise<string | null> {
+  return await new Promise<string | null>((resolve, reject) => {
+    const request = spawn("/usr/bin/dig", ["+short", "@1.1.1.1", hostname, "A"], {
+      stdio: ["ignore", "pipe", "pipe"]
+    });
+    let stdout = "";
+    request.stdout?.on("data", (chunk: Buffer) => { stdout += chunk.toString("utf8"); });
+    request.once("error", reject);
+    request.once("exit", (code) => {
+      if (code !== 0) {
+        resolve(null);
+        return;
+      }
+      const address = stdout.split(/\s+/).find((value) => /^\d{1,3}(?:\.\d{1,3}){3}$/.test(value));
+      resolve(address || null);
+    });
+  });
+}
+
+async function curlHeadStatus(url: string, hostname: string, publicIp: string): Promise<number> {
+  return await new Promise<number>((resolve, reject) => {
+    const request = spawn("/usr/bin/curl", [
+      "--silent",
+      "--show-error",
+      "--head",
+      "--max-time", "10",
+      "--resolve", `${hostname}:443:${publicIp}`,
+      "--output", "/dev/null",
+      "--write-out", "%{http_code}",
+      url
+    ], { stdio: ["ignore", "pipe", "pipe"] });
+    let stdout = "";
+    let stderr = "";
+    request.stdout?.on("data", (chunk: Buffer) => { stdout += chunk.toString("utf8"); });
+    request.stderr?.on("data", (chunk: Buffer) => { stderr += chunk.toString("utf8"); });
+    request.once("error", reject);
+    request.once("exit", (code) => {
+      const status = Number.parseInt(stdout, 10);
+      if (code === 0 && Number.isInteger(status)) resolve(status);
+      else reject(new Error(stderr.trim() || `curl exited with code ${String(code)}`));
+    });
+  });
 }
 
 function sanitizeUsername(input: string): string {

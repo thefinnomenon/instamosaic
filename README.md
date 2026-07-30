@@ -84,8 +84,8 @@ Publish the next campaign item:
 npm run campaign:run
 ```
 
-The campaign needs `INSTAGRAM_RAPIDAPI_KEY`, `INSTAGRAM_USER_ID`, and
-`INSTAGRAM_ACCESS_TOKEN`. It does not use Postgres or R2. A temporary local
+The campaign needs `INSTAGRAM_RAPIDAPI_KEY`, `INSTAGRAM_PAGE_ACCESS_TOKEN`,
+and `INSTAGRAM_BUSINESS_ACCOUNT_ID`. It does not use Postgres or R2. A temporary local
 media server and HTTPS tunnel let Instagram fetch the reveal MP4 and mosaic
 JPEG; both close immediately after Instagram finishes processing the carousel
 and Story. Local artifacts and campaign state are kept under
@@ -94,7 +94,7 @@ and Story. Local artifacts and campaign state are kept under
 To run at 9 AM, 2 PM, and 7 PM each day, add this cron entry with `crontab -e`:
 
 ```cron
-0 9,14,19 * * * cd /path/to/instamosaic && PATH=/path/to/node/bin:/usr/bin:/bin npm run campaign:run >> tmp/instagram-campaign.log 2>&1
+0 9,14,19 * * * cd /path/to/project && PATH=/path/to/project /path/to/project run campaign:run >> /path/to/project 2>&1
 ```
 
 ## Deployment

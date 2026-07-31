@@ -21,6 +21,7 @@
     "campaign:run": "tsx scripts/instagram-campaign.ts",
     "campaign:check": "tsx scripts/instagram-campaign.ts --dry-run",
     "campaign:generate": "tsx scripts/instagram-campaign.ts --generate-only",
+    "instagram:token:check": "tsx scripts/instagram-page-token.ts --check",
     "marketing:draft": "tsx scripts/marketing-draft.ts",
     "test:check": "tsx scripts/test-check.ts",
     "test:download": "tsx scripts/test-download.ts",

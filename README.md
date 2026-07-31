@@ -91,10 +91,31 @@ JPEG; both close immediately after Instagram finishes processing the carousel
 and Story. Local artifacts and campaign state are kept under
 `tmp/instagram-campaign`.
 
+### Instagram Page token maintenance
+
+Publishing requires a Page token with access to your configured Instagram business account.
+
+Run a safe health check weekly. It verifies that the installed Page token can
+still read the configured Instagram account and warns if Meta reports an expiry
+within 14 days:
+
+```bash
+npm run instagram:token:check
+```
+
+```cron
+0 8 * * 1 cd /path/to/instamosaic && PATH=/path/to/node/bin:/usr/bin:/bin /path/to/node/bin/npm run instagram:token:check >> /path/to/instamosaic/tmp/instagram-token-check.log 2>&1
+```
+
+The token can still be invalidated by revoked asset access, permission changes,
+or app/account changes; the weekly live check catches those cases. If the check
+fails, reissue a never-expiring token from the same system user in Meta Business
+Settings, then verify it before replacing `INSTAGRAM_PAGE_ACCESS_TOKEN`.
+
 To run at 9 AM, 2 PM, and 7 PM each day, add this cron entry with `crontab -e`:
 
 ```cron
-0 9,14,19 * * * cd /path/to/project && PATH=/path/to/project /path/to/project run campaign:run >> /path/to/project 2>&1
+0 9,14,19 * * * cd /path/to/instamosaic && PATH=/path/to/node/bin:/usr/bin:/bin /path/to/node/bin/npm run campaign:run >> /path/to/instamosaic/tmp/instagram-campaign.log 2>&1
 ```
 
 ## Deployment

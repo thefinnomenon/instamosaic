@@ -115,7 +115,7 @@ Settings, then verify it before replacing `INSTAGRAM_PAGE_ACCESS_TOKEN`.
 To run at 9 AM, 2 PM, and 7 PM each day, add this cron entry with `crontab -e`:
 
 ```cron
-0 9,14,19 * * * cd /path/to/instamosaic && PATH=/path/to/node/bin:/usr/bin:/bin /path/to/node/bin/npm run campaign:run >> /path/to/instamosaic/tmp/instagram-campaign.log 2>&1
+0 9,14,19 * * * cd /path/to/instamosaic && PATH=/path/to/node/bin:/opt/homebrew/bin:/usr/bin:/bin /path/to/node/bin/npm run campaign:run >> /path/to/instamosaic/tmp/instagram-campaign.log 2>&1
 ```
 
 ## Deployment

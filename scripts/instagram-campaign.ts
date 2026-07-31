@@ -16,6 +16,10 @@ import {
 import { instagramPublisherFromEnv } from "./instagram-publisher.ts";
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const homebrewBin = "/opt/homebrew/bin";
+if (process.platform === "darwin" && !process.env.PATH?.split(path.delimiter).includes(homebrewBin)) {
+  process.env.PATH = [homebrewBin, process.env.PATH].filter(Boolean).join(path.delimiter);
+}
 const targetFile = resolveFromRepository(process.env.INSTAGRAM_CAMPAIGN_TARGETS || "marketing-targets.txt");
 const stateFile = resolveFromRepository(process.env.INSTAGRAM_CAMPAIGN_STATE || "tmp/instagram-campaign-state.json");
 const outputRoot = resolveFromRepository(process.env.INSTAGRAM_CAMPAIGN_OUTPUT_DIR || "tmp/instagram-campaign");

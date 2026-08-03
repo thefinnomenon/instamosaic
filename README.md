@@ -60,7 +60,7 @@ npm run test:reveal
 
 `marketing-targets.txt` contains one Instagram username per line. Each run
 advances to the next target, generates its mosaic and reveal video locally,
-publishes a two-item carousel (reveal first, mosaic second) with an
+publishes the reveal as a Reel in both the Reels tab and main feed with an
 `@username` caption mention, and publishes the reveal separately to Stories.
 The Story includes an API-level mention positioned near the top center using
 the target's numeric Instagram user ID, and the reveal video visibly includes
@@ -86,9 +86,9 @@ npm run campaign:run
 
 The campaign needs `INSTAGRAM_RAPIDAPI_KEY`, `INSTAGRAM_PAGE_ACCESS_TOKEN`,
 and `INSTAGRAM_BUSINESS_ACCOUNT_ID`. It does not use Postgres or R2. A temporary local
-media server and HTTPS tunnel let Instagram fetch the reveal MP4 and mosaic
-JPEG; both close immediately after Instagram finishes processing the carousel
-and Story. Local artifacts and campaign state are kept under
+media server and HTTPS tunnel let Instagram fetch the reveal MP4; both close
+immediately after Instagram finishes processing the Reel and Story. Local
+artifacts and campaign state are kept under
 `tmp/instagram-campaign`.
 
 ### Instagram Page token maintenance

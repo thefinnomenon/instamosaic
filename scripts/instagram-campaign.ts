@@ -13,7 +13,10 @@ import {
   generateRevealVideo,
   revealVideoFilename
 } from "../packages/worker/src/reveal-video.ts";
-import { instagramPublisherFromEnv } from "./instagram-publisher.ts";
+import {
+  instagramPublisherFromEnv,
+  type PublishedInstagramMedia
+} from "./instagram-publisher.ts";
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const homebrewBin = "/opt/homebrew/bin";
@@ -42,8 +45,9 @@ type CampaignState = {
   nextIndex: number;
   published: Array<{
     username: string;
-    carouselId: string;
-    carouselPermalink: string | null;
+    mediaType: "carousel" | "reel";
+    mediaId: string;
+    mediaPermalink: string | null;
     storyId: string | null;
     outputDir: string;
     publishedAt: string;
@@ -69,8 +73,7 @@ try {
       console.log(`Publishing reveal Story with @${username} mention...`);
       const publisher = instagramPublisherFromEnv();
       const mediaServer = await startMediaServer({
-        revealVideoPath: assets.revealVideoPath,
-        mosaicImagePath: assets.mosaicImagePath
+        revealVideoPath: assets.revealVideoPath
       });
       const tunnel = await startTunnel(mediaServer.port);
       try {
@@ -92,21 +95,18 @@ try {
         console.log("Generation-only run complete. Nothing was published.");
         console.log(`Local assets: ${assets.outputDir}`);
       } else {
-        console.log(`Publishing reveal + mosaic carousel for @${username}...`);
+        console.log(`Publishing reveal Reel for @${username}...`);
         const publisher = instagramPublisherFromEnv();
         const mediaServer = await startMediaServer({
-          revealVideoPath: assets.revealVideoPath,
-          mosaicImagePath: assets.mosaicImagePath
+          revealVideoPath: assets.revealVideoPath
         });
         const tunnel = await startTunnel(mediaServer.port);
         const revealVideoUrl = `${tunnel.url}/reveal.mp4`;
-        const mosaicImageUrl = `${tunnel.url}/mosaic.jpg`;
-        let carousel;
+        let reel: PublishedInstagramMedia;
         let storyId: string | null = null;
         try {
-          carousel = await publisher.publishCarousel({
-            revealVideoUrl,
-            mosaicImageUrl,
+          reel = await publisher.publishReel({
+            videoUrl: revealVideoUrl,
             caption: campaignCaption(username)
           });
           try {
@@ -117,7 +117,7 @@ try {
             });
             storyId = story.id;
           } catch (error) {
-            console.error(`Story failed after the carousel was published: ${errorMessage(error)}`);
+            console.error(`Story failed after the Reel was published: ${errorMessage(error)}`);
           }
 
           await writeState({
@@ -126,8 +126,9 @@ try {
               ...state.published,
               {
                 username,
-                carouselId: carousel.id,
-                carouselPermalink: carousel.permalink,
+                mediaType: "reel" as const,
+                mediaId: reel.id,
+                mediaPermalink: reel.permalink,
                 storyId,
                 outputDir: path.relative(repositoryRoot, assets.outputDir),
                 publishedAt: new Date().toISOString()
@@ -140,8 +141,8 @@ try {
         }
 
         console.log(`Campaign run complete for @${username}.`);
-        if (carousel.permalink) console.log(`Post: ${carousel.permalink}`);
-        if (!storyId) console.log("The carousel published, but its Story did not.");
+        if (reel.permalink) console.log(`Reel: ${reel.permalink}`);
+        if (!storyId) console.log("The Reel published, but its Story did not.");
         console.log(`Local assets: ${assets.outputDir}`);
       }
     }
@@ -154,7 +155,6 @@ try {
 async function generateCampaignAssets(username: string): Promise<{
   outputDir: string;
   revealVideoPath: string;
-  mosaicImagePath: string;
 }> {
   const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
   const outputDir = path.join(outputRoot, `${timestamp}-${username}`);
@@ -211,8 +211,7 @@ async function generateCampaignAssets(username: string): Promise<{
 
   return {
     outputDir,
-    revealVideoPath,
-    mosaicImagePath: mosaic.outputs.revealPreview.path
+    revealVideoPath
   };
 }
 
@@ -221,18 +220,13 @@ async function loadExistingCampaignAssets(
 ): Promise<{
   outputDir: string;
   revealVideoPath: string;
-  mosaicImagePath: string;
 }> {
   const outputDir = resolveFromRepository(directory);
   const revealVideoPath = path.join(outputDir, revealVideoFilename);
-  const mosaicImagePath = path.join(outputDir, "reveal-1080x1920.jpg");
-  await Promise.all([
-    readFile(revealVideoPath),
-    readFile(mosaicImagePath)
-  ]).catch(() => {
+  await readFile(revealVideoPath).catch(() => {
     throw new Error(`Publish-only media package is incomplete: ${outputDir}`);
   });
-  return { outputDir, revealVideoPath, mosaicImagePath };
+  return { outputDir, revealVideoPath };
 }
 
 async function readTargets(): Promise<string[]> {
@@ -255,7 +249,9 @@ async function readState(): Promise<CampaignState> {
     const input = parsed as Record<string, unknown>;
     return {
       nextIndex: typeof input.nextIndex === "number" && Number.isInteger(input.nextIndex) ? Math.max(0, input.nextIndex) : 0,
-      published: Array.isArray(input.published) ? input.published as CampaignState["published"] : []
+      published: Array.isArray(input.published)
+        ? input.published.flatMap(normalizeCampaignPublication)
+        : []
     };
   } catch {
     return emptyState();
@@ -264,6 +260,34 @@ async function readState(): Promise<CampaignState> {
 
 function emptyState(): CampaignState {
   return { nextIndex: 0, published: [] };
+}
+
+function normalizeCampaignPublication(value: unknown): CampaignState["published"] {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return [];
+  const publication = value as Record<string, unknown>;
+  const username = typeof publication.username === "string" ? publication.username : null;
+  const mediaId = typeof publication.mediaId === "string"
+    ? publication.mediaId
+    : typeof publication.carouselId === "string"
+      ? publication.carouselId
+      : null;
+  const outputDir = typeof publication.outputDir === "string" ? publication.outputDir : null;
+  const publishedAt = typeof publication.publishedAt === "string" ? publication.publishedAt : null;
+  if (!username || !mediaId || !outputDir || !publishedAt) return [];
+
+  return [{
+    username,
+    mediaType: publication.mediaType === "reel" ? "reel" : "carousel",
+    mediaId,
+    mediaPermalink: typeof publication.mediaPermalink === "string"
+      ? publication.mediaPermalink
+      : typeof publication.carouselPermalink === "string"
+        ? publication.carouselPermalink
+        : null,
+    storyId: typeof publication.storyId === "string" ? publication.storyId : null,
+    outputDir,
+    publishedAt
+  }];
 }
 
 async function writeState(state: CampaignState): Promise<void> {
@@ -284,13 +308,13 @@ async function acquireLock() {
 
 function campaignCaption(username: string): string {
   return [
-    `We turned @${username}'s Instagram into a mosaic.`,
+    `We turned @${username}'s Instagram into a photo mosaic.`,
     "",
-    "Every tiny tile comes from their posts. Swipe to see the finished piece.",
+    "Every tiny tile comes from their posts. Watch the reveal.",
     "",
-    "Who should we mosaic next?",
+    "Who should we mosaic next? Send this to them.",
     "",
-    `@${username} #InstaMosaic #PhotoMosaic #InstagramArt`
+    `@${username} #InstaMosaic #PhotoMosaic #MosaicArt #FanArt #DigitalArt`
   ].join("\n");
 }
 
@@ -306,11 +330,9 @@ function assertCampaignEnvironment(): void {
 
 async function startMediaServer(input: {
   revealVideoPath: string;
-  mosaicImagePath: string;
 }): Promise<{ server: Server; port: number }> {
   const media = new Map([
-    ["/reveal.mp4", { filePath: input.revealVideoPath, contentType: "video/mp4" }],
-    ["/mosaic.jpg", { filePath: input.mosaicImagePath, contentType: "image/jpeg" }]
+    ["/reveal.mp4", { filePath: input.revealVideoPath, contentType: "video/mp4" }]
   ]);
   const server = createServer(async (request, response) => {
     try {
@@ -376,10 +398,7 @@ async function startTunnelAttempt(port: number): Promise<{ process: ChildProcess
       tunnelProcess.stderr?.on("data", inspectOutput);
     });
 
-    await Promise.all([
-      waitForPublicMedia(`${url}/reveal.mp4`),
-      waitForPublicMedia(`${url}/mosaic.jpg`)
-    ]);
+    await waitForPublicMedia(`${url}/reveal.mp4`);
     return { process: tunnelProcess, url };
   } catch (error) {
     tunnelProcess.kill();

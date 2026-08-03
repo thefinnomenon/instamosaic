@@ -11,9 +11,8 @@ export type PublishedInstagramMedia = {
 };
 
 export type InstagramPublisher = {
-  publishCarousel(input: {
-    revealVideoUrl: string;
-    mosaicImageUrl: string;
+  publishReel(input: {
+    videoUrl: string;
     caption: string;
   }): Promise<PublishedInstagramMedia>;
   publishStory(input: {
@@ -28,40 +27,20 @@ export function instagramPublisherFromEnv(): InstagramPublisher {
   const apiVersion = process.env.INSTAGRAM_GRAPH_API_VERSION?.trim() || DEFAULT_GRAPH_API_VERSION;
 
   return {
-    async publishCarousel(input) {
-      const revealId = await createMediaContainer({
+    async publishReel(input) {
+      const reelId = await createMediaContainer({
         userId,
         accessToken,
         apiVersion,
         params: {
-          media_type: "VIDEO",
-          video_url: input.revealVideoUrl,
-          is_carousel_item: "true"
+          media_type: "REELS",
+          video_url: input.videoUrl,
+          caption: input.caption,
+          share_to_feed: "true"
         }
       });
-      await waitForContainer({ containerId: revealId, accessToken, apiVersion });
-      const mosaicId = await createMediaContainer({
-        userId,
-        accessToken,
-        apiVersion,
-        params: {
-          image_url: input.mosaicImageUrl,
-          is_carousel_item: "true"
-        }
-      });
-      await waitForContainer({ containerId: mosaicId, accessToken, apiVersion });
-      const carouselId = await createMediaContainer({
-        userId,
-        accessToken,
-        apiVersion,
-        params: {
-          media_type: "CAROUSEL",
-          children: `${revealId},${mosaicId}`,
-          caption: input.caption
-        }
-      });
-      await waitForContainer({ containerId: carouselId, accessToken, apiVersion });
-      return publishContainer({ userId, containerId: carouselId, accessToken, apiVersion });
+      await waitForContainer({ containerId: reelId, accessToken, apiVersion });
+      return publishContainer({ userId, containerId: reelId, accessToken, apiVersion });
     },
 
     async publishStory(input) {

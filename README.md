@@ -1,134 +1,103 @@
 # InstaMosaic
 
-InstaMosaic generates print-ready and social-ready mosaics from public Instagram image posts.
+InstaMosaic turns public Instagram image posts into photo mosaics for print and
+social sharing. A customer supplies an Instagram username and a hero image;
+the worker downloads source photos, builds the mosaic, and generates previews,
+downloads, and a reveal video.
 
-The production architecture is now Next.js/Postgres/R2/Cloud Run based:
+## Project structure
 
-- Next.js App Router web/API application in `app/`
-- Prisma ORM with Prisma-hosted PostgreSQL
-- Cloudflare R2-compatible object storage for uploaded inputs and generated outputs
-- Private Cloud Run worker invoked by Google Cloud Tasks
-- Postgres-backed job progress, dispatch state, generated asset records, analytics, downloads, print orders, and marketing drafts
-- Resend email for processing, completion, failure, purchase, and marketing-review notifications
-- Stripe Checkout and webhook handling for digital downloads and print orders
+- `app/`: Next.js App Router pages, API routes, admin dashboard, and checkout.
+- `packages/db/`: Prisma/PostgreSQL models and data access.
+- `packages/mosaic/`: Mosaic rendering and image exports using Sharp.
+- `packages/storage/`: Cloudflare R2-compatible storage and a local fallback.
+- `packages/worker/`: Instagram ingestion, job processing, reveal videos, and email.
+- `scripts/`: Local verification and optional marketing utilities.
 
-SQLite has been removed from runtime persistence.
+## Requirements
 
-## Local Setup
+- Node.js 24, or a supported Node.js 22 release, with npm.
+- PostgreSQL; Docker Compose can start the included local database.
+- FFmpeg for reveal-video generation.
+- Provider credentials for the integrations you intend to use.
+
+Live Instagram ingestion currently needs an updated provider integration: the
+default RapidAPI host returns HTTP 404. The local mock-download and reveal-video
+checks below can run without that provider.
+
+## Local development
 
 ```bash
 cp .env.example .env
-npm install
+npm ci
+docker compose up -d postgres
 npm run prisma:generate
 npm run prisma:migrate
 npm run dev
 ```
 
-For local Cloud Tasks replacement, set:
+Configure `.env` before starting the app. The example includes local PostgreSQL
+and worker settings; add credentials for Instagram ingestion, email, payments,
+or object storage as needed. Real environment files are ignored by Git.
 
-```env
-CLOUD_TASKS_DEV_MODE=local
-LOCAL_WORKER_URL=http://127.0.0.1:8080
-WORKER_SHARED_SECRET=dev-worker-secret
-```
+`npm run dev` starts the Next.js app and HTTP worker. In local mode, the app
+sends jobs directly to the worker. Production uses Google Cloud Tasks to invoke
+a private Cloud Run worker.
 
-`npm run dev` starts the app and the HTTP worker. The app creates a job and dispatches the worker through the local worker URL.
-
-## Core Scripts
+## Development commands
 
 ```bash
-npm run dev              # app plus local worker HTTP service
-npm run dev:app          # app only
-npm run worker:http      # Cloud Run-style worker endpoint
-npm run prisma:migrate   # create/apply a local migration
-npm run db:init          # apply migrations in deployed environments
-npm run typecheck
-npm --workspace app run build
+npm run dev:app          # Start only the web app
+npm run worker:http      # Start the HTTP worker
+npm run prisma:migrate   # Create and apply local migrations
+npm run db:init          # Apply existing migrations
+npm run typecheck        # Check server and app TypeScript
+npm run build            # Generate Prisma client and build the app
 ```
 
-Existing harnesses are still available:
+Local checks that do not call the Instagram provider:
 
 ```bash
-npm run test:check -- username
-npm run test:download -- username --mock
-npm run test:mosaic -- hero.jpg tmp/test/username/tiles
-npm run test:pipeline -- username hero.jpg
+npm run test:download -- demo --mock
 npm run test:reveal
 ```
 
-## Automated Instagram Campaign
-
-`marketing-targets.txt` contains one Instagram username per line. Each run
-advances to the next target, generates its mosaic and reveal video locally,
-publishes the reveal as a Reel in both the Reels tab and main feed with an
-`@username` caption mention, and publishes the reveal separately to Stories.
-The Story includes an API-level mention positioned near the top center using
-the target's numeric Instagram user ID, and the reveal video visibly includes
-the target handle.
-
-Check the next target without generating or publishing:
+Checks using a configured Instagram provider:
 
 ```bash
-npm run campaign:check
+npm run test:check -- username
+npm run test:download -- username
+npm run test:pipeline -- username hero.jpg
 ```
 
-Generate and inspect the complete local media package without publishing:
+## Optional marketing tools
+
+Campaign tools read usernames from `marketing-targets.txt`. Their local state
+and generated media are stored under `tmp/`.
 
 ```bash
-npm run campaign:generate
+npm run campaign:check       # Inspect the next target
+npm run campaign:generate    # Generate media without publishing
 ```
 
-Publish the next campaign item:
-
-```bash
-npm run campaign:run
-```
-
-The campaign needs `INSTAGRAM_RAPIDAPI_KEY`, `INSTAGRAM_PAGE_ACCESS_TOKEN`,
-and `INSTAGRAM_BUSINESS_ACCOUNT_ID`. It does not use Postgres or R2. A temporary local
-media server and HTTPS tunnel let Instagram fetch the reveal MP4; both close
-immediately after Instagram finishes processing the Reel and Story. Local
-artifacts and campaign state are kept under
-`tmp/instagram-campaign`.
-
-### Instagram Page token maintenance
-
-Publishing requires a Page token with access to your configured Instagram business account.
-
-Run a safe health check weekly. It verifies that the installed Page token can
-still read the configured Instagram account and warns if Meta reports an expiry
-within 14 days:
-
-```bash
-npm run instagram:token:check
-```
-
-```cron
-0 8 * * 1 cd /path/to/instamosaic && PATH=/path/to/node/bin:/usr/bin:/bin /path/to/node/bin/npm run instagram:token:check >> /path/to/instamosaic/tmp/instagram-token-check.log 2>&1
-```
-
-The token can still be invalidated by revoked asset access, permission changes,
-or app/account changes; the weekly live check catches those cases. If the check
-fails, reissue a never-expiring token from the same system user in Meta Business
-Settings, then verify it before replacing `INSTAGRAM_PAGE_ACCESS_TOKEN`.
-
-To run at 9 AM, 2 PM, and 7 PM each day, add this cron entry with `crontab -e`:
-
-```cron
-0 9,14,19 * * * cd /path/to/instamosaic && PATH=/path/to/node/bin:/opt/homebrew/bin:/usr/bin:/bin /path/to/node/bin/npm run campaign:run >> /path/to/instamosaic/tmp/instagram-campaign.log 2>&1
-```
+Publishing requires separate Meta account configuration. See `.env.example`
+for variable names and `docs/marketing-automation.md` for workflow notes.
 
 ## Deployment
 
-Use the app on Vercel and deploy the worker Docker image to private Cloud Run. Cloud Tasks should send only `{ "jobId": "..." }` to `POST /internal/jobs/process` with an OIDC token for the Cloud Run service.
+The app targets Vercel, with a private Cloud Run worker, Google Cloud Tasks,
+PostgreSQL, and Cloudflare R2-compatible object storage.
 
-Vercel project settings:
+Vercel settings:
 
-- Framework preset: Next.js
+- Framework: Next.js
 - Install command: `npm install`
 - Build command: `npm --workspace app run build`
 - Development command: `npm run dev:app`
 
-Set the Vercel environment variables listed in `.env.example`, except local-only variables such as `CLOUD_TASKS_DEV_MODE`, `LOCAL_WORKER_URL`, and `WORKER_ALLOW_UNAUTHENTICATED`.
+Configure production credentials in the hosting environment. Keep local-only
+settings such as `CLOUD_TASKS_DEV_MODE`, `LOCAL_WORKER_URL`, and
+`WORKER_ALLOW_UNAUTHENTICATED` out of production.
 
-See [docs/production-architecture.md](docs/production-architecture.md) for the inspected architecture, data model, deployment variables, and operational notes.
+See [production architecture](docs/production-architecture.md) for deployment
+variables, request flow, persistence, and worker authentication.
